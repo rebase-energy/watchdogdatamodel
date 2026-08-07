@@ -56,14 +56,50 @@ match; most joins are informal zone+data_type matching. See
    resolution, a recurrence opens a NEW issue linked to its predecessor by a
    shared fingerprint (series+check identity).
 
+## Research findings (2026-08-07, three parallel surveys)
+
+Surveyed: OpenMetadata, DataHub, Soda, Elementary, MobyDQ, Great Expectations,
+Deequ, Sentry Seer/Autofix, Sweep, OpenHands resolver, StackStorm, Monte
+Carlo/Bigeye docs.
+
+- **Incident model validated.** OpenMetadata groups incidents by stateId with
+  exactly our semantics (open incident absorbs failures; new failure after
+  resolution = new incident; explicit re-triage reopens). DataHub has discrete
+  incidents with no cross-episode grouping. Check tools (Elementary/GE/Soda)
+  don't merge repeated failures at all — suppression or manual incidents only.
+- **Steal: resolution reason.** OpenMetadata requires reason (FalsePositive,
+  MissingData, OutOfBounds, Other) + comment on resolve.
+- **Steal: state vs stage.** DataHub separates state (ACTIVE/RESOLVED) from
+  stage (Triage/Investigation/WIP/Fixed/No-action-required). Our issue.state =
+  core; issue.stage = product-configurable kanban column.
+- **Coverage design validated with caveat.** Every tool stores passing results
+  because none has a first-class run+scope record (MobyDQ is closest: inserts
+  Pending rows per planned check before execution, making never-ran visible).
+  Dropping check_result is safe only if check_run coverage is first-class.
+  Future extension (not now): Deequ-style metric history for drift/anomaly
+  checks; recomputable from TimeDB meanwhile.
+- **Check identity must be explicit, stable, product-chosen strings.** Soda
+  content-hashes definitions and needed identity-migration machinery + a
+  user-pinnable identity override; Elementary loses history on rename.
+- **Data-time ≠ run-time** (Soda dataTimestamp, Deequ dataSetDate): keep both
+  on runs and issues; timedatamodel vocabulary already provides this.
+- **Actions: unanimous — mutable row, never events-only.** Sentry Seer: one
+  run_state row per investigation (status enum incl. WAITING_FOR_USER_RESPONSE;
+  bulky artifacts in one JSON field; relational columns only for joins: issue
+  id, PR mapping). StackStorm: append-only rows for facts, mutable
+  LiveAction/Execution (14 statuses) for processes, with an embedded
+  append-only {status,timestamp} transition log pushed on each change; terminal
+  states frozen. Sentry backfill jobs: no status enum — nullable lifecycle
+  timestamps (started_at/completed_at/failed_at/verified_at) + unique
+  constraint for idempotent enqueueing. OpenHands resolver: the no-DB
+  counterexample (rents GitHub Actions state; success detection = grep;
+  history expires in 30 days; no is-one-running query).
+
 ## Open questions
 
-- **action as its own table vs folded into issue_event.** Leaning separate table
-  (processes with mutable status + params + outcome vs append-only diary;
-  executor work-queue query), with events referencing actions rather than
-  duplicating them. User wants more discussion; researching how OpenMetadata,
-  DataHub, Soda, Elementary, MobyDQ, Sentry Seer/Autofix, StackStorm and
-  GitHub-native AI resolvers model this before deciding.
+- **action table: confirm final shape with user** (separate table now backed by
+  unanimous research evidence; open sub-choices: status enum vs lifecycle
+  timestamps, embedded transition log).
 - Exact core table list (currently: series, check_run, issue, issue_event,
   action?) and field-level design.
 - How multi-series checks (e.g. source divergence comparing two series)

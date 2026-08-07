@@ -2,6 +2,7 @@
 import psycopg
 from psycopg.types.json import Jsonb
 
+from .db import tx
 from ..models import RESOLUTION_REASONS, Issue, IssueEvent
 
 
@@ -37,7 +38,7 @@ def open_or_touch(conn, *, fingerprint, origin, title, actor, severity="medium",
     Touching bumps last_seen_at and records a detected_again event; it never
     rewrites details (evidence stays frozen at detection, spec §3.4).
     """
-    with conn.transaction():
+    with tx(conn), conn.transaction():
         row = conn.execute(
             "SELECT id FROM issue WHERE fingerprint = %s AND state = 'open' FOR UPDATE",
             (fingerprint,),
@@ -97,7 +98,7 @@ def resolve(conn, issue_id, *, reason, actor, comment=None) -> Issue:
         raise ValueError(
             f"unknown resolution reason {reason!r}; allowed: {sorted(RESOLUTION_REASONS)}"
         )
-    with conn.transaction():
+    with tx(conn), conn.transaction():
         row = conn.execute(
             """
             UPDATE issue SET state = 'resolved', resolved_at = now(),
@@ -116,7 +117,7 @@ def resolve(conn, issue_id, *, reason, actor, comment=None) -> Issue:
 
 def reopen(conn, issue_id, *, actor, comment=None) -> Issue:
     """Human-initiated only (spec §3.4): automatic recurrence opens a new issue."""
-    with conn.transaction():
+    with tx(conn), conn.transaction():
         row = conn.execute(
             """
             UPDATE issue SET state = 'open', resolved_at = NULL, resolution_reason = NULL,
@@ -132,7 +133,7 @@ def reopen(conn, issue_id, *, actor, comment=None) -> Issue:
 
 
 def set_stage(conn, issue_id, *, stage, actor) -> Issue:
-    with conn.transaction():
+    with tx(conn), conn.transaction():
         old = conn.execute(
             "SELECT stage FROM issue WHERE id = %s FOR UPDATE", (issue_id,)
         ).fetchone()

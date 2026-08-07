@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from psycopg.types.json import Jsonb
 
+from .db import tx
 from ..models import TERMINAL_ACTION_STATUSES, Action
 from .issues import add_event
 
@@ -19,7 +20,7 @@ def get_action(conn, action_id) -> Action | None:
 def enqueue(conn, issue_id, type, *, requested_by, params=None) -> tuple[Action, bool]:
     """Queue an action. A live (queued/running) duplicate makes this a no-op
     that returns the existing action (spec §3.6 idempotency rule)."""
-    with conn.transaction():
+    with tx(conn), conn.transaction():
         row = conn.execute(
             """
             INSERT INTO action (issue_id, type, params, requested_by, transitions)
@@ -65,7 +66,7 @@ def claim_next(conn, type, *, worker) -> Action | None:
 def finish(conn, action_id, *, status, by, outcome=None) -> Action:
     if status not in TERMINAL_ACTION_STATUSES:
         raise ValueError(f"finish status must be one of {sorted(TERMINAL_ACTION_STATUSES)}")
-    with conn.transaction():
+    with tx(conn), conn.transaction():
         row = conn.execute(
             """
             UPDATE action SET status = %s, finished_at = now(),

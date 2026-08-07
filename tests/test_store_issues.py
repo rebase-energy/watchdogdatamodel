@@ -77,3 +77,34 @@ def test_not_seen_stage_and_reopen(conn):
     assert types == ["opened", "stage_changed", "not_seen", "resolved", "reopened"]
     stage_ev = [e for e in list_events(conn, issue.id) if e.type == "stage_changed"][0]
     assert stage_ev.data == {"from": "new", "to": "healing"}
+
+
+def test_shared_connection_thread_safety(conn):
+    """32 threads interleaving transacting store calls on ONE connection must
+    not corrupt transaction nesting (the store's tx lock guarantee)."""
+    import threading
+
+    from watchdogdatamodel.store.issues import open_or_touch, resolve
+
+    errors: list[Exception] = []
+
+    def _worker(i: int) -> None:
+        try:
+            issue, _ = open_or_touch(
+                conn, fingerprint=f"k{i % 8}|gap", origin="check",
+                title="t", actor=f"run:{i}",
+            )
+            if i % 3 == 0:
+                try:
+                    resolve(conn, issue.id, reason="recovered", actor=f"run:{i}")
+                except ValueError:
+                    pass  # already resolved by a sibling — fine
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=_worker, args=(i,)) for i in range(64)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors[:3]

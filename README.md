@@ -93,11 +93,16 @@ timedatamodel — TimeDB, energydb — is compatible by construction.
 
 ## Status
 
-Design approved; implementation starting.
+Core implemented: the SQL schema (`src/watchdogdatamodel/schema.sql`), the
+Python package (models plus helpers for fingerprints, coverage, events, and
+the action lifecycle), and a contract-test suite that verifies the model's
+guarantees against a real PostgreSQL. Adoption by the grid-map watchdog is the
+next phase.
 
+- Getting started: [docs/adopters-guide.md](docs/adopters-guide.md)
 - Full design: [docs/specs/2026-08-07-quality-ops-data-model-design.md](docs/specs/2026-08-07-quality-ops-data-model-design.md)
 - Decision history and prior-art survey: [BRAINSTORM.md](BRAINSTORM.md)
 
-Planned deliverables: the SQL DDL, the Python package (models plus helpers for
-fingerprints, coverage, events, and the action lifecycle), and a contract-test
-suite that verifies the model's guarantees in any deployment.
+Tests: `uv run python -m pytest` — DB-backed tests need `WDM_TEST_PG_DSN`
+pointing at a throwaway database whose name ends in `_test` (they DROP and
+recreate the model's tables).

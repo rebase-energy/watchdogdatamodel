@@ -21,3 +21,4 @@ packages = ["src/watchdogdatamodel"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-p tests.dbsupport"

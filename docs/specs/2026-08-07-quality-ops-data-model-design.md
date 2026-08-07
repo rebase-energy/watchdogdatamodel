@@ -103,6 +103,9 @@ checks (`source_divergence`) are multi-series checks using `related_series`
 Check *code* lives in the product. This row is identity + self-description, so
 issues can FK it and coverage can name it.
 
+Implementation note: `check` is a reserved SQL word; the physical table is
+named `check_definition`. All `check_id` column names are unchanged.
+
 ### 3.3 `check_run` — one execution of checks over a declared scope
 
 | column | type | notes |

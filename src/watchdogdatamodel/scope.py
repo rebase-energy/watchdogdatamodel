@@ -16,6 +16,7 @@ def validate_scope(scope: dict) -> dict:
         if kind == "labels":
             if not isinstance(value, dict):
                 raise ValueError("scope['series']['labels'] must be a dict")
+            # A label value may be a scalar (equality) or a list (membership).
         elif kind == "ids":
             if not isinstance(value, list) or not all(isinstance(i, str) for i in value):
                 raise ValueError("scope['series']['ids'] must be a list of strings")
@@ -36,8 +37,13 @@ def scope_covers(scope: dict, *, series_id: str, labels: dict, check_id: str) ->
         (kind, value), = series.items()
         if kind == "ids" and series_id not in value:
             return False
-        if kind == "labels" and any(labels.get(k) != v for k, v in value.items()):
-            return False
+        if kind == "labels":
+            for k, v in value.items():
+                if isinstance(v, list):
+                    if labels.get(k) not in v:
+                        return False
+                elif labels.get(k) != v:
+                    return False
     checks = scope["checks"]
     if checks != "all" and check_id not in checks:
         return False

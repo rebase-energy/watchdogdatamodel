@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7",
     "psycopg[binary]>=3.1",
-    "timedatamodel",
+    "timedatamodel[pandas]",
 ]
 
 [dependency-groups]

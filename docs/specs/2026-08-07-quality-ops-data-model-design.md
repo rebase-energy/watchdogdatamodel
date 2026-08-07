@@ -79,6 +79,15 @@ Round-trip guarantee: a `series` row converts losslessly to/from
 `timedatamodel.TimeSeries(df=None, …)` (labels ride alongside). This is a
 contract test, and it is the energydb-compatibility guarantee.
 
+**One signal, many sources ⇒ many series rows.** When the same logical signal
+is fetched from several sources (grid map: SE-SE1 production from energydb,
+from the independent ENTSOE parser, from the PSD API), each (signal × source)
+is its own catalog row, distinguished by the `source` label. Checks run per
+source-series (freshness of one feed is independent of another); comparison
+checks (`source_divergence`) are multi-series checks using `related_series`
+(§3.4). Product-level groupings — the watchdog board's zone×data_type "cell"
+— are label queries, not schema.
+
 ### 3.2 `check` — catalog of checks
 
 | column | type | notes |
@@ -132,7 +141,7 @@ Post-heal verification is `trigger=targeted` with a one-series scope.
 | `stage` | text NOT NULL | product-defined kanban column (`new`, `triage`, `healing`, `awaiting_verification`, …). Free strings; core never interprets |
 | `severity` | text NOT NULL default `'medium'` | `critical`, `high`, `medium`, `low` |
 | `title` | text NOT NULL | |
-| `details` | jsonb NOT NULL default `'{}'` | structured for check issues (observed values, thresholds); free-form for human/agent (the "flexible edges" decision) |
+| `details` | jsonb NOT NULL default `'{}'` | structured for check issues (observed values, thresholds, frozen `evidence` — see below); free-form for human/agent (the "flexible edges" decision) |
 | `valid_start`, `valid_end` | timestamptz | affected DATA window; real columns so range queries work |
 | `knowledge_time` | timestamptz | for OVERLAPPING series: which forecast run is affected |
 | `first_seen_at`, `last_seen_at` | timestamptz NOT NULL | recurrence-while-open, denormalized for boards |
@@ -159,6 +168,13 @@ Constraint: `CREATE UNIQUE INDEX ON issue (fingerprint) WHERE state = 'open'`.
   series×check and reports no detection, the core records a `not_seen` event;
   the product's policy then resolves (watchdog default: resolve immediately,
   reason `recovered`). Human/agent-origin issues never auto-resolve.
+
+**Evidence freezes at detection.** Snapshots (§3.7) roll forward, so "latest"
+stops showing what a problem looked like. When a check opens (or re-detects)
+an issue, it stores the affected window only — a bounded excerpt in
+timedatamodel wire format — under `details.evidence`. Frozen with the issue,
+never updated by later fetches (the failed-rows-sample pattern from
+OpenMetadata/Soda: keep detail only where something went wrong).
 
 **PII.** Issues are PII-free. Human reports' reporter name/email stay in a
 product-side companion table with today's insert-only discipline
@@ -213,6 +229,27 @@ Constraints and rules:
   webhook — the model doesn't care) writes `external_changed` events on the
   issue. Resolution still only comes from a covering clean run (§3.4).
 
+### 3.7 `series_snapshot` — the working copy of the data
+
+The values the checks actually saw, and what product UIs plot. Explicitly a
+working copy, not a system of record: full history lives in TimeDB / energydb
+/ the product's sources. One row per series, overwritten on each fetch.
+
+| column | type | notes |
+|---|---|---|
+| `series_id` | uuid PK, FK → series | one snapshot per series (UPSERT) |
+| `run_id` | uuid FK → check_run, nullable | which run fetched it |
+| `fetched_at` | timestamptz NOT NULL | |
+| `window_start`, `window_end` | timestamptz NOT NULL | valid_time extent of the payload |
+| `payload` | jsonb NOT NULL | the data in timedatamodel wire format (`to_list()` columns dict) — OVERLAPPING series carry `knowledge_time` natively |
+| `stats` | jsonb NOT NULL default `'{}'` | point count, null count, min/max — cheap board summaries without parsing payload |
+
+Sizing: operational windows only (today's watchdog: ~1k series, a few KB–tens
+of KB each). No snapshot history — that is deliberate; keeping per-run
+snapshot history is the slippery slope to a second timeseries database.
+Point-in-time forensics come from issue evidence (§3.4), which freezes the
+affected window at detection.
+
 ## 4. Lifecycle walkthrough (reference narrative)
 
 Sweep run #456 (scheduled, scope all/all) finds a gap in SE-SE1 production →
@@ -236,7 +273,7 @@ this one.
 | `watchdog_issues` + `watchdog_issue_state` | `issue` + `issue_event` |
 | `watchdog_backfill_jobs` + `watchdog_agent_requests` | `action` (`backfill`, `agent_investigation`) |
 | `data_reports` | `issue` (origin `human`) + product-side reporter-contact table (PII) |
-| `watchdog_series` (chart cache) | stays product-side (UI cache, not a quality concept) |
+| `watchdog_series` (chart cache) | `series_snapshot` — same latest-only behavior, now joined to the spine by a real key |
 | `watchdog_deployments`, `watchdog_settings` | stay product-side ops tables, unchanged |
 
 Migration stance (user decision): fresh start is acceptable; migrate prod
@@ -250,14 +287,18 @@ repopulates itself on the first run against the new schema.
 2. **Python package** (`watchdogdatamodel`) — pydantic models mirroring the
    tables; `timedatamodel` dependency; helpers: fingerprint computation, scope
    matching / coverage evaluation, event emission, action lifecycle
-   (enqueue / claim / transition / freeze), series ↔ `TimeSeries` round-trip.
+   (enqueue / claim / transition / freeze), series ↔ `TimeSeries` round-trip,
+   snapshot upsert + payload (de)serialization, evidence excerpting.
 3. **Contract tests** any deployment can run — the blueprint's guarantees:
    - `issue_event` is append-only (no UPDATE/DELETE path in the store API).
    - one open issue per fingerprint; second open attempt attaches instead.
    - one live action per (issue, type); duplicate enqueue is a no-op returning
      the live action.
    - terminal actions refuse mutation.
-   - series ↔ timedatamodel round-trip is lossless.
+   - series ↔ timedatamodel round-trip is lossless; snapshot payloads parse
+     back into `TimeSeries` objects of the declared shape.
+   - snapshots are latest-only (a second write for the same series replaces,
+     never accumulates); issue evidence is immutable once written.
    - resolution requires a reason.
    - coverage helper: covered ⇒ silence means healthy; out-of-scope ⇒ silence
      means nothing.

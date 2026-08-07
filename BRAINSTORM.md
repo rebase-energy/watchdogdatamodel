@@ -107,11 +107,17 @@ Carlo/Bigeye docs.
 - What of the watchdog UI cache (watchdog_series) and ops tables
   (deployments, settings) — stay product-side, outside the core model.
 
-## Candidate core model (approach 1, evolving)
+## Core model (settled — see docs/specs/2026-08-07-quality-ops-data-model-design.md)
 
-- `series` — catalog of watched series (timedatamodel metadata + labels)
+- `series` — catalog of watched series (timedatamodel metadata + labels); one
+  row per (signal × source)
+- `check` — catalog of checks (stable string ids)
 - `check_run` — one execution of checks over a declared scope, with coverage
-- `issue` — one problem, any origin, stable ID, current status, fingerprint
+- `issue` — one problem, any origin, fingerprint-deduped, state+stage,
+  incident-model recurrence, frozen evidence at detection
 - `issue_event` — append-only diary per issue
-- `action` (under discussion) — typed remediation processes (backfill, agent
-  investigation, refetch, notify, ...) with product-registered types
+- `action` — typed remediation processes (backfill, agent_investigation,
+  notify, ...) with product-registered types, mutable status + transition log
+- `series_snapshot` — latest fetched window per series (timedatamodel wire
+  format), overwritten; the working copy checks saw and UIs plot (decided
+  2026-08-07: latest-only, no history; forensics via issue evidence)

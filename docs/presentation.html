@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WatchdogDataModel — the data model, distilled</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --night:#0d1320; --panel:#151d2f; --panel-2:#1a2439; --line:#26314b;
+    --ink:#e9edf6; --muted:#8d97ad; --faint:#5b6579;
+    --teal:#4fd8c4; --amber:#ffb454; --red:#f4587a; --blue:#6ea8ff;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+    --disp:"Space Grotesk",var(--sans);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--night);color:var(--ink);font-family:var(--sans);overflow:hidden}
+
+  .deck{display:flex;height:100dvh;transition:transform .45s cubic-bezier(.4,0,.2,1)}
+  @media (prefers-reduced-motion: reduce){.deck{transition:none}}
+  .slide{min-width:100vw;height:100dvh;padding:6vh 7vw;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden}
+
+  .eyebrow{font-family:var(--mono);font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--teal);margin-bottom:22px}
+  h1{font-family:var(--disp);font-weight:700;font-size:clamp(40px,5.2vw,74px);line-height:1.04;letter-spacing:-.015em;max-width:20ch}
+  h2{font-family:var(--disp);font-weight:700;font-size:clamp(30px,3.6vw,52px);line-height:1.06;letter-spacing:-.015em;margin-bottom:10px}
+  .sub{color:var(--muted);font-size:clamp(16px,1.5vw,21px);line-height:1.55;max-width:62ch;margin-top:18px}
+  .kicker{color:var(--muted);font-size:clamp(15px,1.25vw,18px);line-height:1.55;max-width:70ch;margin-bottom:34px}
+  .mono{font-family:var(--mono)}
+  .amber{color:var(--amber)} .teal{color:var(--teal)} .red{color:var(--red)}
+
+  /* ---- chrome ---- */
+  .progress{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--teal),var(--amber));width:0;z-index:10;transition:width .45s cubic-bezier(.4,0,.2,1)}
+  .counter{position:fixed;right:26px;bottom:20px;font-family:var(--mono);font-size:13px;color:var(--faint);z-index:10}
+  .dots{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);display:flex;gap:10px;z-index:10}
+  .dots button{width:9px;height:9px;border-radius:50%;border:1px solid var(--faint);background:transparent;cursor:pointer;padding:0}
+  .dots button[aria-current="true"]{background:var(--teal);border-color:var(--teal)}
+  .dots button:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+  .hint{position:fixed;left:26px;bottom:18px;font-family:var(--mono);font-size:12px;color:var(--faint);z-index:10}
+
+  /* ---- slide 1 ---- */
+  .hero-trace{position:absolute;inset:auto 0 0 0;height:46vh;width:100%;opacity:.9;pointer-events:none}
+  .titlemark{font-family:var(--mono);font-size:14px;color:var(--faint);margin-top:26px}
+  .titlemark b{color:var(--amber);font-weight:500}
+
+  /* ---- generic panels / cards ---- */
+  .cols{display:grid;grid-template-columns:minmax(340px,44%) 1fr;gap:5vw;align-items:center}
+  .fig{width:100%;height:auto;display:block}
+  .fig text{font-family:var(--mono)}
+  .cards{display:grid;grid-template-columns:repeat(2,minmax(280px,1fr));gap:22px;max-width:1080px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 26px 24px}
+  .card .glyph{width:34px;height:34px;margin-bottom:16px}
+  .card h3{font-family:var(--disp);font-size:21px;font-weight:700;margin-bottom:9px}
+  .card p{color:var(--muted);font-size:15.5px;line-height:1.6}
+  .card p b{color:var(--ink);font-weight:600}
+
+  .pains{display:flex;flex-direction:column;gap:18px;margin-top:8px}
+  .pain{display:flex;gap:14px;align-items:flex-start}
+  .pain .no{font-family:var(--mono);color:var(--red);font-size:14px;margin-top:3px;white-space:nowrap}
+  .pain p{color:var(--muted);font-size:16.5px;line-height:1.55}
+  .pain p b{color:var(--ink);font-weight:600}
+
+  .chips{display:flex;gap:18px;flex-wrap:wrap;margin:26px 0 34px}
+  .chip{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 26px;min-width:180px}
+  .chip .big{font-family:var(--disp);font-size:40px;font-weight:700;color:var(--teal)}
+  .chip .lab{font-family:var(--mono);font-size:12.5px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-top:4px}
+  .chip.amber .big{color:var(--amber)}
+  .nextrow{display:flex;align-items:center;gap:16px;margin-top:8px;color:var(--muted);font-size:16.5px}
+  .nextrow .arrow{color:var(--amber);font-family:var(--mono)}
+  .footlist{color:var(--muted);font-size:16px;line-height:1.75;max-width:66ch}
+  .footlist b{color:var(--ink);font-weight:600}
+
+  @media (max-width:900px){
+    .cols{grid-template-columns:1fr;gap:26px}
+    .cards{grid-template-columns:1fr}
+    .slide{padding:5vh 6vw;overflow-y:auto;justify-content:flex-start;padding-top:9vh}
+  }
+</style>
+</head>
+<body>
+
+<div class="progress" id="progress"></div>
+<div class="deck" id="deck">
+
+  <!-- ─────────────── 1 · TITLE ─────────────── -->
+  <section class="slide" aria-label="Title">
+    <div>
+      <div class="eyebrow">rebase-energy / watchdogdatamodel</div>
+      <h1>The watchdog, distilled to its <span class="teal">data&nbsp;model</span>.</h1>
+      <p class="sub">A reusable blueprint for timeseries data quality — extracted from the
+      grid-map watchdog, designed for every Rebase product that watches data:
+      detect&nbsp;→ track&nbsp;→ act&nbsp;→ verify against the data itself.</p>
+      <p class="titlemark">the signature problem: <b>a gap in a series</b> — and everything that should happen next</p>
+    </div>
+    <svg class="hero-trace" viewBox="0 0 1200 300" preserveAspectRatio="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#4fd8c4" stop-opacity=".14"/>
+          <stop offset="1" stop-color="#4fd8c4" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <path d="M0,190 L60,180 120,196 180,168 240,178 300,150 340,162" fill="none" stroke="#4fd8c4" stroke-width="2.5"/>
+      <path d="M0,190 L60,180 120,196 180,168 240,178 300,150 340,162 L340,300 0,300Z" fill="url(#fade)"/>
+      <rect x="342" y="60" width="216" height="200" fill="#ffb454" opacity=".07"/>
+      <line x1="342" y1="60" x2="342" y2="260" stroke="#ffb454" stroke-width="1.5" stroke-dasharray="4 5" opacity=".8"/>
+      <line x1="558" y1="60" x2="558" y2="260" stroke="#ffb454" stroke-width="1.5" stroke-dasharray="4 5" opacity=".8"/>
+      <text x="450" y="95" fill="#ffb454" font-size="13" text-anchor="middle" font-family="IBM Plex Mono,monospace">gap</text>
+      <path d="M558,150 L620,142 680,158 740,128 800,140 860,116 920,130 980,108 1040,120 1100,98 1200,108" fill="none" stroke="#4fd8c4" stroke-width="2.5"/>
+      <path d="M558,150 L620,142 680,158 740,128 800,140 860,116 920,130 980,108 1040,120 1100,98 1200,108 L1200,300 558,300Z" fill="url(#fade)"/>
+    </svg>
+  </section>
+
+  <!-- ─────────────── 2 · WHY ─────────────── -->
+  <section class="slide" aria-label="Why">
+    <div class="cols">
+      <div>
+        <div class="eyebrow">why touch something that works</div>
+        <h2>The watchdog is fine.<br>Its database grew wild.</h2>
+        <div class="pains">
+          <div class="pain"><span class="no">01</span><p><b>Nine tables</b>, grown one feature at a time, tied to grid-map vocabulary (zones, sweeps, backfills).</p></div>
+          <div class="pain"><span class="no">02</span><p><b>Three issue-identity schemes</b> — <span class="mono red">issue_id</span> · <span class="mono red">issue_key</span> · <span class="mono red">cluster_key</span> — that never match each other.</p></div>
+          <div class="pain"><span class="no">03</span><p>The board's issue id hashes the flagged timestamps — so <b>the same problem changes identity as a gap grows</b>, orphaning its history.</p></div>
+          <div class="pain"><span class="no">04</span><p>Most joins happen by <b>matching zone strings</b>, not keys. And every other product would need this machinery rebuilt.</p></div>
+        </div>
+      </div>
+      <svg class="fig" viewBox="0 0 520 430" aria-label="Nine tables with mismatched links">
+        <g font-size="11.5" fill="#8d97ad">
+          <!-- scattered boxes -->
+          <g>
+            <rect x="30"  y="30"  width="150" height="34" rx="7" fill="#151d2f" stroke="#26314b"/><text x="105" y="51" text-anchor="middle">watchdog_results</text>
+            <rect x="330" y="22"  width="150" height="34" rx="7" fill="#151d2f" stroke="#26314b"/><text x="405" y="43" text-anchor="middle">watchdog_series</text>
+            <rect x="60"  y="120" width="160" height="34" rx="7" fill="#151d2f" stroke="#f4587a"/><text x="140" y="141" text-anchor="middle" fill="#f4587a">watchdog_issue_state</text>
+            <rect x="320" y="112" width="150" height="34" rx="7" fill="#151d2f" stroke="#f4587a"/><text x="395" y="133" text-anchor="middle" fill="#f4587a">watchdog_issues</text>
+            <rect x="40"  y="210" width="190" height="34" rx="7" fill="#151d2f" stroke="#26314b"/><text x="135" y="231" text-anchor="middle">watchdog_backfill_jobs</text>
+            <rect x="300" y="205" width="190" height="34" rx="7" fill="#151d2f" stroke="#f4587a"/><text x="395" y="226" text-anchor="middle" fill="#f4587a">watchdog_agent_requests</text>
+            <rect x="30"  y="300" width="150" height="34" rx="7" fill="#151d2f" stroke="#26314b"/><text x="105" y="321" text-anchor="middle">data_reports</text>
+            <rect x="210" y="360" width="170" height="34" rx="7" fill="#151d2f" stroke="#26314b"/><text x="295" y="381" text-anchor="middle">watchdog_deployments</text>
+            <rect x="330" y="295" width="150" height="34" rx="7" fill="#151d2f" stroke="#26314b"/><text x="405" y="316" text-anchor="middle">watchdog_settings</text>
+          </g>
+          <!-- broken joins -->
+          <g stroke="#f4587a" stroke-width="1.3" stroke-dasharray="5 5" fill="none" opacity=".75">
+            <path d="M140,154 C170,180 180,180 200,210"/>
+            <path d="M220,137 C260,130 280,128 320,128"/>
+            <path d="M395,146 C395,170 395,180 392,205"/>
+            <path d="M105,64 C110,90 120,100 132,120"/>
+          </g>
+          <g font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#f4587a">
+            <text x="243" y="120">issue_key ≠</text>
+            <text x="243" y="134">issue_id</text>
+            <text x="408" y="180">cluster_key ≠ both</text>
+            <text x="150" y="188">zone|dtype string match</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <!-- ─────────────── 3 · THE MODEL ─────────────── -->
+  <section class="slide" aria-label="The model">
+    <div class="eyebrow">the redesign</div>
+    <h2>Seven tables, <span class="teal">one spine</span>.</h2>
+    <p class="kicker">Every table reaches <span class="mono">issue</span> or <span class="mono">series</span> in one hop, by real foreign keys.
+    The core never says “zone”, “backfill” or “sweep” — <b style="color:var(--ink)">machinery in the core, vocabulary in the product</b> (labels, check ids, action types, board stages).</p>
+    <svg class="fig" viewBox="0 0 1160 380" style="max-width:1150px" aria-label="Seven table schematic">
+      <defs>
+        <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L8,4 L0,8 z" fill="#5b6579"/>
+        </marker>
+      </defs>
+      <g font-size="15" font-family="IBM Plex Mono,monospace">
+        <!-- catalogs -->
+        <rect x="20" y="60" width="215" height="64" rx="10" fill="#151d2f" stroke="#4fd8c4" stroke-width="1.6"/>
+        <text x="127" y="88" text-anchor="middle" fill="#4fd8c4">series</text>
+        <text x="127" y="110" text-anchor="middle" fill="#8d97ad" font-size="11.5" font-family="IBM Plex Sans">what we watch · labels</text>
+
+        <rect x="20" y="250" width="215" height="64" rx="10" fill="#151d2f" stroke="#4fd8c4" stroke-width="1.6"/>
+        <text x="127" y="278" text-anchor="middle" fill="#4fd8c4">check</text>
+        <text x="127" y="300" text-anchor="middle" fill="#8d97ad" font-size="11.5" font-family="IBM Plex Sans">how we judge · stable ids</text>
+
+        <rect x="20" y="150" width="215" height="64" rx="10" fill="#101828" stroke="#26314b"/>
+        <text x="127" y="178" text-anchor="middle" fill="#9fb2cc">series_snapshot</text>
+        <text x="127" y="200" text-anchor="middle" fill="#8d97ad" font-size="11.5" font-family="IBM Plex Sans">latest data, working copy</text>
+
+        <!-- run -->
+        <rect x="400" y="150" width="230" height="72" rx="10" fill="#151d2f" stroke="#6ea8ff" stroke-width="1.6"/>
+        <text x="515" y="180" text-anchor="middle" fill="#6ea8ff">check_run</text>
+        <text x="515" y="203" text-anchor="middle" fill="#8d97ad" font-size="11.5" font-family="IBM Plex Sans">declared scope → coverage</text>
+
+        <!-- issue -->
+        <rect x="800" y="140" width="245" height="88" rx="10" fill="#1c1c14" stroke="#ffb454" stroke-width="2"/>
+        <text x="922" y="172" text-anchor="middle" fill="#ffb454">issue</text>
+        <text x="922" y="194" text-anchor="middle" fill="#8d97ad" font-size="11.5" font-family="IBM Plex Sans">check · human · agent</text>
+        <text x="922" y="212" text-anchor="middle" fill="#8d97ad" font-size="11.5" font-family="IBM Plex Sans">open → resolved (+reason)</text>
+
+        <!-- diary + action -->
+        <rect x="700" y="300" width="215" height="58" rx="10" fill="#101828" stroke="#26314b"/>
+        <text x="807" y="325" text-anchor="middle" fill="#9fb2cc">issue_event</text>
+        <text x="807" y="345" text-anchor="middle" fill="#8d97ad" font-size="11.5" font-family="IBM Plex Sans">append-only diary</text>
+
+        <rect x="945" y="300" width="195" height="58" rx="10" fill="#101828" stroke="#26314b"/>
+        <text x="1042" y="325" text-anchor="middle" fill="#9fb2cc">action</text>
+        <text x="1042" y="345" text-anchor="middle" fill="#8d97ad" font-size="11.5" font-family="IBM Plex Sans">typed work queue</text>
+
+        <!-- edges -->
+        <g stroke="#5b6579" stroke-width="1.5" fill="none">
+          <path d="M127,124 L127,150" marker-end="url(#arr)"/>
+          <path d="M235,92 C320,92 340,160 400,172" marker-end="url(#arr)"/>
+          <path d="M235,282 C320,282 340,212 400,200" marker-end="url(#arr)"/>
+          <path d="M630,186 L800,184" marker-end="url(#arr)"/>
+          <path d="M860,228 C840,260 825,275 812,300" marker-end="url(#arr)"/>
+          <path d="M985,228 C1005,260 1022,275 1035,300" marker-end="url(#arr)"/>
+        </g>
+        <g font-size="11" fill="#5b6579" font-family="IBM Plex Mono,monospace">
+          <text x="672" y="170">opens / touches</text>
+          <text x="303" y="70">in scope</text>
+          <text x="303" y="262">in scope</text>
+        </g>
+      </g>
+    </svg>
+  </section>
+
+  <!-- ─────────────── 4 · RULES ─────────────── -->
+  <section class="slide" aria-label="Rules">
+    <div class="eyebrow">the rules that do the heavy lifting</div>
+    <h2>Small model, strict physics.</h2>
+    <p class="kicker">Each rule is enforced by the database itself — constraints and triggers, not good intentions.</p>
+    <div class="cards">
+      <div class="card">
+        <svg class="glyph" viewBox="0 0 34 34"><circle cx="17" cy="17" r="13" fill="none" stroke="#4fd8c4" stroke-width="2"/><path d="M17 17 L17 6 A11 11 0 0 1 27 15 Z" fill="#4fd8c4" opacity=".55"/></svg>
+        <h3>Coverage, not silence</h3>
+        <p>Runs declare their scope <b>before</b> running; nothing stores “everything’s fine”.
+        <b>Healthy = covered by a completed run + no open issue.</b> A source we couldn’t even fetch becomes an issue, never a blank.</p>
+      </div>
+      <div class="card">
+        <svg class="glyph" viewBox="0 0 34 34"><path d="M17 3 L29 8 V17 C29 25 24 29 17 31 C10 29 5 25 5 17 V8 Z" fill="none" stroke="#ffb454" stroke-width="2"/><path d="M11 17 l4 4 l8 -8" fill="none" stroke="#ffb454" stroke-width="2"/></svg>
+        <h3>Dedup by constraint</h3>
+        <p>One fingerprint (series + check) → <b>at most one open issue, enforced by a unique index</b>.
+        The same gap seen five nights in a row is one issue touched five times — duplicates are impossible, not discouraged.</p>
+      </div>
+      <div class="card">
+        <svg class="glyph" viewBox="0 0 34 34"><circle cx="9" cy="17" r="5" fill="none" stroke="#6ea8ff" stroke-width="2"/><circle cx="25" cy="17" r="5" fill="none" stroke="#6ea8ff" stroke-width="2"/><path d="M14 17 h6" stroke="#6ea8ff" stroke-width="2" stroke-dasharray="2 3"/></svg>
+        <h3>Incidents, with memory</h3>
+        <p>A problem that returns after being resolved opens a <b>new issue linked to its predecessor</b>.
+        January’s outage and June’s parser bug stay separate stories — incident counts and time-to-resolution stay honest.</p>
+      </div>
+      <div class="card">
+        <svg class="glyph" viewBox="0 0 34 34"><path d="M5 26 L13 26 M9 26 L9 9 L25 9 M25 9 L25 26 M21 26 L29 26" stroke="#f4587a" stroke-width="2" fill="none"/><path d="M4 30 h26" stroke="#f4587a" stroke-width="2"/></svg>
+        <h3>Data truth &gt; process truth</h3>
+        <p>A successful backfill or a <b>merged PR never resolves an issue</b>.
+        Only a later run that covers the series and finds nothing does. Code that doesn’t fix the data doesn’t get to claim victory.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── 5 · LIFE OF AN ISSUE ─────────────── -->
+  <section class="slide" aria-label="Life of an issue">
+    <div class="eyebrow">one issue, end to end</div>
+    <h2>The gap’s whole story, on one spine.</h2>
+    <p class="kicker">Every step below is one row: an event in the diary or an action in the queue. The whole story reads back from a single issue id.</p>
+    <svg class="fig" viewBox="0 0 1160 330" style="max-width:1150px" aria-label="Issue lifecycle timeline">
+      <defs>
+        <linearGradient id="fade2" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#4fd8c4" stop-opacity=".13"/><stop offset="1" stop-color="#4fd8c4" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <!-- the series trace with gap and heal -->
+      <path d="M20,95 L80,88 140,99 200,80 260,90 300,84" fill="none" stroke="#4fd8c4" stroke-width="2.5"/>
+      <path d="M20,95 L80,88 140,99 200,80 260,90 300,84 L300,150 20,150Z" fill="url(#fade2)"/>
+      <rect x="302" y="40" width="168" height="110" fill="#ffb454" opacity=".08"/>
+      <line x1="302" y1="40" x2="302" y2="150" stroke="#ffb454" stroke-width="1.4" stroke-dasharray="4 5"/>
+      <line x1="470" y1="40" x2="470" y2="150" stroke="#ffb454" stroke-width="1.4" stroke-dasharray="4 5"/>
+      <text x="386" y="66" fill="#ffb454" font-size="12.5" text-anchor="middle" font-family="IBM Plex Mono,monospace">gap</text>
+      <path d="M470,90 L530,84 590,96 650,78 710,88 770,74 830,86 890,70 950,80 1010,66 1140,74" fill="none" stroke="#4fd8c4" stroke-width="2.5"/>
+      <path d="M470,90 L530,84 590,96 650,78 710,88 770,74 830,86 890,70 950,80 1010,66 1140,74 L1140,150 470,150Z" fill="url(#fade2)"/>
+      <!-- healed patch highlight -->
+      <path d="M470,90 L530,84 590,96" fill="none" stroke="#ffb454" stroke-width="3" opacity=".9"/>
+      <text x="530" y="120" fill="#ffb454" font-size="11.5" text-anchor="middle" font-family="IBM Plex Mono,monospace">backfilled</text>
+
+      <!-- timeline -->
+      <line x1="20" y1="205" x2="1140" y2="205" stroke="#26314b" stroke-width="2"/>
+      <g font-family="IBM Plex Mono,monospace" font-size="12.5">
+        <g><circle cx="90" cy="205" r="6" fill="#ffb454"/>
+          <text x="90" y="238" text-anchor="middle" fill="#e9edf6">opened</text>
+          <text x="90" y="257" text-anchor="middle" fill="#8d97ad" font-size="11">evidence frozen</text></g>
+        <g><circle cx="255" cy="205" r="6" fill="#f4587a"/>
+          <text x="255" y="238" text-anchor="middle" fill="#e9edf6">backfill</text>
+          <text x="255" y="257" text-anchor="middle" fill="#f4587a" font-size="11">failed</text></g>
+        <g><circle cx="430" cy="205" r="6" fill="#6ea8ff"/>
+          <text x="430" y="238" text-anchor="middle" fill="#e9edf6">agent investigates</text>
+          <text x="430" y="257" text-anchor="middle" fill="#8d97ad" font-size="11">finds parser bug → PR</text></g>
+        <g><circle cx="640" cy="205" r="6" fill="#6ea8ff"/>
+          <text x="640" y="238" text-anchor="middle" fill="#e9edf6">PR merged</text>
+          <text x="640" y="257" text-anchor="middle" fill="#8d97ad" font-size="11">issue still open</text></g>
+        <g><circle cx="830" cy="205" r="6" fill="#4fd8c4"/>
+          <text x="830" y="238" text-anchor="middle" fill="#e9edf6">re-check: clean</text>
+          <text x="830" y="257" text-anchor="middle" fill="#8d97ad" font-size="11">targeted run covers it</text></g>
+        <g><circle cx="1010" cy="205" r="6" fill="#4fd8c4"/>
+          <text x="1010" y="238" text-anchor="middle" fill="#4fd8c4">resolved</text>
+          <text x="1010" y="257" text-anchor="middle" fill="#8d97ad" font-size="11">reason: recovered</text></g>
+      </g>
+      <!-- recurrence -->
+      <path d="M1010,290 C960,318 300,318 120,296" fill="none" stroke="#5b6579" stroke-width="1.4" stroke-dasharray="5 5"/>
+      <text x="565" y="308" text-anchor="middle" fill="#8d97ad" font-size="12" font-family="IBM Plex Mono,monospace">months later: new issue → predecessor_id points back here</text>
+    </svg>
+  </section>
+
+  <!-- ─────────────── 6 · STATUS ─────────────── -->
+  <section class="slide" aria-label="Status and next">
+    <div class="eyebrow">where it stands — today</div>
+    <h2>Built, tested, <span class="teal">ready to adopt</span>.</h2>
+    <div class="chips">
+      <div class="chip"><div class="big">7</div><div class="lab">tables, one spine</div></div>
+      <div class="chip"><div class="big">36/36</div><div class="lab">contract tests green</div></div>
+      <div class="chip amber"><div class="big">1</div><div class="lab">blueprint, many products</div></div>
+    </div>
+    <p class="footlist">
+      <b>Shipped:</b> PostgreSQL schema + Python package + contract-test suite, in
+      <span class="mono">rebase-energy/watchdogdatamodel</span>.<br>
+      <b>Forecasts are first-class:</b> series speak
+      <span class="mono">timedatamodel</span> — valid time + knowledge time — so energydb,
+      forecast QC and weather QC fit without special cases.<br>
+      <b>Template, not a service:</b> each product deploys its own copy —
+      grid map · energydb ops · forecast quality · weather data · customer-facing health.
+    </p>
+    <div class="nextrow"><span class="arrow">next&nbsp;→</span>
+      adapt the grid-map watchdog: run the new model on dev alongside prod sweeps, then flip once it earns it.</div>
+  </section>
+
+</div>
+
+<div class="dots" id="dots" role="tablist" aria-label="Slides"></div>
+<div class="counter" id="counter">1 / 6</div>
+<div class="hint">← → to navigate</div>
+
+<script>
+  const deck = document.getElementById("deck");
+  const slides = deck.children.length;
+  const dots = document.getElementById("dots");
+  const counter = document.getElementById("counter");
+  const progress = document.getElementById("progress");
+  let i = 0;
+
+  for (let n = 0; n < slides; n++) {
+    const b = document.createElement("button");
+    b.setAttribute("aria-label", "Slide " + (n + 1));
+    b.addEventListener("click", () => go(n));
+    dots.appendChild(b);
+  }
+
+  function go(n) {
+    i = Math.max(0, Math.min(slides - 1, n));
+    deck.style.transform = `translateX(-${i * 100}vw)`;
+    counter.textContent = `${i + 1} / ${slides}`;
+    progress.style.width = `${((i + 1) / slides) * 100}%`;
+    [...dots.children].forEach((d, k) => d.setAttribute("aria-current", k === i ? "true" : "false"));
+  }
+
+  addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") go(i + 1);
+    if (e.key === "ArrowLeft" || e.key === "PageUp") go(i - 1);
+    if (e.key === "Home") go(0);
+    if (e.key === "End") go(slides - 1);
+  });
+  addEventListener("click", (e) => {
+    if (e.target.closest("button") || e.target.closest("a")) return;
+    if (e.clientX > innerWidth * 0.8) go(i + 1);
+    else if (e.clientX < innerWidth * 0.2) go(i - 1);
+  });
+  go(0);
+</script>
+</body>
+</html>

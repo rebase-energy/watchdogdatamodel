@@ -1,6 +1,6 @@
 [project]
 name = "watchdogdatamodel"
-version = "0.2.0"
+version = "0.3.0"
 description = "Generalized data model for timeseries data-quality operations"
 requires-python = ">=3.11"
 dependencies = [

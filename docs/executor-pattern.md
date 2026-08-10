@@ -57,3 +57,41 @@ missing feature in the model.
 
 Reference binding: the grid-map watchdog's `docs/watchdog-executor-contract.md`
 in rebase-grid (credential bundle, GitHub App identity, backend registry).
+
+## Learnings from the first non-Claude executor run (2026-08-10)
+
+A harness backend (OpenCode driving Kimi K3 on a Modal endpoint) ran a real
+investigation end-to-end against the grid-map deployment: brief rendered from
+the read-only SDK → agent in a throwaway worktree → executor-opened draft PR.
+The pattern held with zero changes to the model or the protocol — the
+"adding a backend" promise above survived first contact. What the run taught:
+
+**Capability separation is the safety model, and it is enforceable.** The
+agent held no tracker credential and no database DSN; every tracker operation
+(branch, push, PR) was done by the deterministic executor, whose only
+deliverable-creating code path is a *draft*. Merging was not forbidden — it
+was *impossible*. Harness-level permission walls (OpenCode's `deny` rules
+survive headless runs) add a second wall in front of `git`/`gh` even inside
+the sandbox. Executors should be built this way around any model, trusted or
+not: instructions are a courtesy, capabilities are the contract.
+
+**Work orders want to be files.** Concatenating `investigation_brief` +
+`situation` into one markdown file was the agent's entire context and it
+sufficed for a correct, evidence-dense verdict. Implement: a `work_order()`
+composite in the read-only SDK that renders that bundle in one call, so every
+executor stops hand-assembling it.
+
+**The queue is the missing half.** This run was pointed at an issue id by
+hand because no action row existed — which also meant the deliverable could
+not carry a `wdm-action:` stamp, only informal issue provenance, so the
+reconciler cannot adopt it. Implement: `trackers.claim_next()` (atomically
+claim the oldest queued action of a kind, respecting `max_inflight`) so
+harness backends can poll the model as a queue and stamp correctly from birth.
+
+**Fact-check the agent with the same SDK.** The executor's read-only handle
+makes verifying an agent's systemic claims (issue counts, affected zones,
+lineage) a few cheap queries. Every claim in this run's report checked out —
+but the check cost seconds, and a backend that verifies before delivering
+turns "plausible" into "confirmed". Worth documenting as an optional
+post-agent step in any binding; candidates for a helper once a second product
+adopts it.

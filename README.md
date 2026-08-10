@@ -100,6 +100,7 @@ guarantees against a real PostgreSQL. Adoption by the grid-map watchdog is the
 next phase.
 
 - Getting started: [docs/adopters-guide.md](docs/adopters-guide.md)
+- Agents reading the DB: [docs/agent-sdk.md](docs/agent-sdk.md)
 - Full design: [docs/specs/2026-08-07-quality-ops-data-model-design.md](docs/specs/2026-08-07-quality-ops-data-model-design.md)
 - Decision history and prior-art survey: [BRAINSTORM.md](BRAINSTORM.md)
 

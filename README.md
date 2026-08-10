@@ -96,8 +96,8 @@ timedatamodel — TimeDB, energydb — is compatible by construction.
 Core implemented: the SQL schema (`src/watchdogdatamodel/schema.sql`), the
 Python package (models plus helpers for fingerprints, coverage, events, and
 the action lifecycle), and a contract-test suite that verifies the model's
-guarantees against a real PostgreSQL. Adoption by the grid-map watchdog is the
-next phase.
+guarantees against a real PostgreSQL. The grid-map watchdog runs on this model
+in production (since 2026-08-10), and a read-only agent SDK ships in the package.
 
 - Getting started: [docs/adopters-guide.md](docs/adopters-guide.md)
 - Agents reading the DB: [docs/agent-sdk.md](docs/agent-sdk.md)

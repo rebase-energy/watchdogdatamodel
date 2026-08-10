@@ -122,7 +122,7 @@ Carlo/Bigeye docs.
   format), overwritten; the working copy checks saw and UIs plot (decided
   2026-08-07: latest-only, no history; forensics via issue evidence)
 
-## Planned: `trackers` protocol layer (decided 2026-08-10, not yet built)
+## `trackers` protocol layer (decided AND SHIPPED 2026-08-10, v0.4.0)
 
 First prod day of agent investigations produced five integration bugs — all in
 the PROTOCOL between an external tracker and the model, none GitHub-specific:
@@ -135,6 +135,7 @@ A `watchdogdatamodel.trackers` module with `record_external_change` (dedup +
 terminal-freeze discipline), `finish_on_external_close` (deliverable/slot
 semantics), and `reconcile_external(fetch_state)` (webhooks for latency,
 polling for truth, idempotent). No tracker API in the blueprint — products
-supply auth + fetchers (~50 lines of glue). Implement when the grid-map
-integration stabilizes or adopter #2 arrives; its behavior is currently
-field-tested in rebase-grid src/psd/watchdog_api/wdm/agent.py.
+supply auth + fetchers (~50 lines of glue). Shipped same day at Davide's challenge ("no code to ship?") — the protocol is
+enforced by the package, contract-tested (rules 1-5 in tests/test_trackers.py).
+The grid-map's wdm/agent.py predates it (behavior-identical); refactor onto
+the module opportunistically.

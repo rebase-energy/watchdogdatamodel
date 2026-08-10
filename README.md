@@ -101,6 +101,7 @@ in production (since 2026-08-10), and a read-only agent SDK ships in the package
 
 - Getting started: [docs/adopters-guide.md](docs/adopters-guide.md)
 - Agents reading the DB: [docs/agent-sdk.md](docs/agent-sdk.md)
+- Agent executors: [docs/executor-pattern.md](docs/executor-pattern.md)
 - Full design: [docs/specs/2026-08-07-quality-ops-data-model-design.md](docs/specs/2026-08-07-quality-ops-data-model-design.md)
 - Decision history and prior-art survey: [BRAINSTORM.md](BRAINSTORM.md)
 

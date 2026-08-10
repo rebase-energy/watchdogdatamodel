@@ -86,3 +86,25 @@ def test_reconcile_grace_window_covers_recently_resolved(action):
         conn, action_type="agent_investigation",
         fetch_state=lambda a: {"kind": "ticket", "state": "closed"})
     assert out["recovered"] == 1  # resolved issue still got its last look
+
+
+def test_claim_next_is_the_queue_and_respects_max_inflight(action):
+    conn, aid, iid = action  # fixture leaves one queued agent_investigation
+    a1 = trackers.claim_next(conn, "agent_investigation", worker="w1",
+                             max_inflight=1)
+    assert a1 is not None and str(a1.id) == aid and a1.status == "running"
+    # a second queued action exists, but the budget is spent -> None
+    s = upsert_series(conn, key="k:y:s", name="n", labels={})
+    issue2, _ = open_or_touch(conn, fingerprint="k:y:s|c", origin="check",
+                              title="t", actor="run:t", series_id=s.id)
+    a2q, _ = enqueue(conn, issue2.id, "agent_investigation", requested_by="u",
+                     params={})
+    assert trackers.claim_next(conn, "agent_investigation", worker="w1",
+                               max_inflight=1) is None
+    # an external close frees the slot (rule 3); the next claim is FIFO
+    trackers.finish_on_external_close(conn, aid, reason="completed")
+    a2 = trackers.claim_next(conn, "agent_investigation", worker="w2",
+                             max_inflight=1)
+    assert a2 is not None and str(a2.id) == str(a2q.id)
+    # drained queue -> None, capped or not
+    assert trackers.claim_next(conn, "agent_investigation", worker="w2") is None

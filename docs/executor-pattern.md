@@ -77,16 +77,29 @@ not: instructions are a courtesy, capabilities are the contract.
 
 **Work orders want to be files.** Concatenating `investigation_brief` +
 `situation` into one markdown file was the agent's entire context and it
-sufficed for a correct, evidence-dense verdict. Implement: a `work_order()`
-composite in the read-only SDK that renders that bundle in one call, so every
-executor stops hand-assembling it.
+sufficed for a correct, evidence-dense verdict. Shipped in v0.6:
+`ReadOnly.work_order()` renders that bundle in one call, so every executor
+stops hand-assembling it.
 
 **The queue is the missing half.** This run was pointed at an issue id by
 hand because no action row existed — which also meant the deliverable could
 not carry a `wdm-action:` stamp, only informal issue provenance, so the
-reconciler cannot adopt it. Implement: `trackers.claim_next()` (atomically
-claim the oldest queued action of a kind, respecting `max_inflight`) so
-harness backends can poll the model as a queue and stamp correctly from birth.
+reconciler cannot adopt it. Shipped in v0.6: `trackers.claim_next()`
+(atomically claim the oldest queued action of a kind, respecting
+`max_inflight`) so harness backends can poll the model as a queue and stamp
+correctly from birth.
+
+**Finishing is its own small-context stage.** The same day's second run (a
+real fix, stamped end-to-end, adopted by the webhook) nearly died at the
+finish line: after ~40 tool-heavy steps the model's wrap-up turn stalled near
+its context ceiling, and a "continue" nudge sent it back into re-running the
+product's full test suite instead of writing the deliverable text. What
+worked: a FRESH request carrying only the diff, the verification evidence,
+and the required output format — one turn, perfect deliverable. Executors
+should treat "produce the deliverable text" as a separate stage with a
+minimal, executor-assembled context, not as the tail of the investigation
+session; and a completion contract ("this file exists") plus a bounded retry
+is what turns a stalled model turn from a dead run into a hiccup.
 
 **Fact-check the agent with the same SDK.** The executor's read-only handle
 makes verifying an agent's systemic claims (issue counts, affected zones,

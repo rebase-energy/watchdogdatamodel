@@ -18,7 +18,9 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
+from .store.actions import claim_next as _store_claim_next
 from .store.actions import finish, get_action
+from .store.db import tx
 from .store.issues import add_event
 
 log = logging.getLogger(__name__)
@@ -50,6 +52,31 @@ def find_stamp(text: str | None):
     m = _STAMP_RE.search(text or "")
     return m.group(1) if m else None
 
+
+
+def claim_next(conn, action_type: str, *, worker: str,
+               max_inflight: int | None = None):
+    """Executor entry point: claim the oldest queued action of this type.
+
+    The model IS the queue — an executor polls this instead of subscribing to
+    tracker events, then stamps everything it creates with :func:`stamp` on
+    the claimed action's id. ``max_inflight`` enforces the concurrency budget
+    rule 3 protects: the running-count check and the claim share one
+    transaction, so a slot freed by :func:`finish_on_external_close` is seen
+    immediately and never double-spent.
+
+    Returns the claimed Action (now ``running``, with the worker recorded in
+    its transition log), or None — nothing queued, or the budget is spent.
+    """
+    with tx(conn), conn.transaction():
+        if max_inflight is not None:
+            n = conn.execute(
+                "SELECT count(*) AS n FROM action "
+                "WHERE type = %s AND status = 'running'",
+                (action_type,)).fetchone()["n"]
+            if n >= max_inflight:
+                return None
+        return _store_claim_next(conn, action_type, worker=worker)
 
 
 def record_external_change(conn, action_id, *, kind: str, state: str,

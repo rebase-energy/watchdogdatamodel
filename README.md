@@ -175,6 +175,7 @@ timedatamodel (TimeDB, energydb) is compatible by construction.
 | v0.3 | agent layer: `investigation_brief`, `history`, `situation`, `summary`; pooled-DSN support (0.3.1) |
 | v0.4 | trackers protocol (five rules, contract-tested) |
 | v0.5 | protocol v2: canonical kinds, UUID stamping, attach-not-finish deliverables, reconcile grace window |
+| v0.6 | executor support: `trackers.claim_next` (queue-claim with `max_inflight`), `ReadOnly.work_order` |
 
 ## Tests
 

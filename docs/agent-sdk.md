@@ -80,6 +80,18 @@ None.
 …
 ```
 
+### `work_order` (v0.6)
+
+```python
+ro.work_order(issue_id)   # budget="compact"|"full"
+```
+
+The complete file-ready work order for one investigation:
+`investigation_brief` + `---` + `situation`, in one call. Executors write it
+into the agent's sandbox as its entire context (see
+[executor-pattern.md](executor-pattern.md)); the output is exactly the two
+composites above concatenated, so no separate example here.
+
 ### `situation`
 
 ```python

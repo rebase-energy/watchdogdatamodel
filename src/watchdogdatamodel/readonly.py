@@ -152,6 +152,14 @@ class ReadOnly:
                                   "No snapshot (cell may be empty or unreadable)."))
         return "\n\n".join(out)
 
+    def work_order(self, issue_id: str, budget: str = "full") -> str:
+        """The complete, file-ready work order for one investigation: the
+        issue's brief plus the board situation, in one call. Executors write
+        this into the agent's sandbox as its entire context instead of
+        hand-assembling the bundle (see docs/executor-pattern.md)."""
+        return (self.investigation_brief(issue_id, budget=budget)
+                + "\n\n---\n\n" + self.situation())
+
     def history(self, issue_id: str) -> str:
         i = self.get_issue(issue_id)
         if i is None:

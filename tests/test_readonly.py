@@ -73,3 +73,16 @@ def test_investigation_brief_renders_the_whole_story(conn):
     # composites are read-only text; summary works too
     assert "## Watchdog summary" in ro.summary()
     assert "## Open issues" in ro.situation(labels={"zone": "Z2"})
+
+
+def test_work_order_bundles_brief_and_situation(conn):
+    from watchdogdatamodel.readonly import ReadOnly
+    from watchdogdatamodel.store.issues import open_or_touch
+    from watchdogdatamodel.store.series import upsert_series
+
+    s = upsert_series(conn, key="z3:price:src", name="n", labels={"zone": "Z3"})
+    issue, _ = open_or_touch(conn, fingerprint="z3:price:src|dvg", origin="check",
+                             title="dvg", actor="run:t", series_id=s.id)
+    md = ReadOnly(DSN).work_order(str(issue.id))
+    brief_at, situation_at = md.index("## Issue"), md.index("## Open issues")
+    assert brief_at < situation_at  # one file: the brief, then the board

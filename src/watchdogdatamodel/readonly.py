@@ -33,10 +33,19 @@ class ReadOnly:
     """A read-only session over the seven wdm tables."""
 
     def __init__(self, dsn: str) -> None:
-        self._conn = psycopg.connect(
-            dsn, autocommit=True, row_factory=dict_row,
-            options="-c default_transaction_read_only=on",
-        )
+        try:
+            self._conn = psycopg.connect(
+                dsn, autocommit=True, row_factory=dict_row,
+                options="-c default_transaction_read_only=on",
+            )
+        except psycopg.OperationalError as e:
+            if "unsupported startup parameter" not in str(e):
+                raise
+            # Pooled DSNs (e.g. Neon's PgBouncer) reject startup options;
+            # fall back to a session SET. The SELECT-only role remains the
+            # primary wall; this one is belt-and-braces where supported.
+            self._conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
+            self._conn.execute("SET default_transaction_read_only = on")
 
     @classmethod
     def from_env(cls) -> "ReadOnly":

@@ -56,3 +56,33 @@ def test_reconcile_recovers_lost_news_idempotently(action):
     out2 = trackers.reconcile_external(conn, action_type="agent_investigation",
                                        fetch_state=fetch_state)
     assert out2 == {"checked": 1, "recovered": 0}  # diary already knows
+
+
+def test_multiple_deliverables_attach_without_finishing(action):
+    conn, aid, iid = action
+    assert trackers.add_deliverable(conn, aid, ref={"id": 1, "url": "x/1"})
+    assert not trackers.add_deliverable(conn, aid, ref={"id": 1, "url": "x/1"})  # dedup
+    assert trackers.add_deliverable(conn, aid, ref={"id": 2, "url": "x/2"})
+    row = conn.execute("SELECT status, outcome->'deliverables' d FROM action "
+                       "WHERE id=%s", (aid,)).fetchone()
+    assert row["status"] == "running" or row["status"] == "queued"  # engagement continues
+    assert [d["id"] for d in row["d"]] == [1, 2]
+
+
+def test_stamp_correlation_no_keywords():
+    import uuid
+    u = str(uuid.uuid4())
+    assert trackers.find_stamp(f"Some PR body\n{trackers.stamp(u)}\n") == u
+    assert trackers.find_stamp("mentions #99 and closes #100") is None
+
+
+def test_reconcile_grace_window_covers_recently_resolved(action):
+    from watchdogdatamodel.store.issues import resolve
+
+    conn, aid, iid = action
+    trackers.record_external_change(conn, aid, kind="ticket", state="open")
+    resolve(conn, iid, reason="recovered", actor="t")
+    out = trackers.reconcile_external(
+        conn, action_type="agent_investigation",
+        fetch_state=lambda a: {"kind": "ticket", "state": "closed"})
+    assert out["recovered"] == 1  # resolved issue still got its last look

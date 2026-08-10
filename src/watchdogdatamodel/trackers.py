@@ -23,6 +23,34 @@ from .store.issues import add_event
 
 log = logging.getLogger(__name__)
 
+# Canonical kinds (recommendation, not enforcement): "ticket" = the tracker
+# item mirroring the work; "deliverable" = an artifact the agent produced
+# (PR/MR/patch/report). Generic on purpose — no tracker vocabulary.
+KIND_TICKET = "ticket"
+KIND_DELIVERABLE = "deliverable"
+
+_STAMP_RE = None
+
+
+def stamp(action_id) -> str:
+    """The machine line to embed in anything created on the tracker.
+    Correlation happens by exact UUID — never by prose keywords."""
+    return f"wdm-action: {action_id}"
+
+
+def find_stamp(text: str | None):
+    """Extract a stamped action id from tracker text, or None."""
+    global _STAMP_RE
+    if _STAMP_RE is None:
+        import re
+
+        _STAMP_RE = re.compile(
+            r"wdm-action:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+            r"[0-9a-f]{4}-[0-9a-f]{12})", re.I)
+    m = _STAMP_RE.search(text or "")
+    return m.group(1) if m else None
+
+
 
 def record_external_change(conn, action_id, *, kind: str, state: str,
                            actor: str = "tracker", data: dict | None = None) -> bool:
@@ -67,20 +95,48 @@ def finish_on_external_close(conn, action_id, *, reason: str = "completed",
     return True
 
 
+def add_deliverable(conn, action_id, *, ref: dict,
+                    actor: str = "tracker") -> bool:
+    """Rule 4 (Davide, 2026-08-10): the action is the ENGAGEMENT, deliverables
+    are attachments — an agent may produce 0..n. Appends `ref` to the live
+    action's outcome.deliverables (deduped by its "id" key when present) and
+    records the diary event either way. Finishing is a separate decision."""
+    a = get_action(conn, action_id)
+    if a is None:
+        return False
+    existing = (a.outcome or {}).get("deliverables") or []
+    rid = ref.get("id")
+    if rid is not None and any(d.get("id") == rid for d in existing):
+        return False
+    if a.status in ("queued", "running"):
+        from psycopg.types.json import Jsonb
+
+        conn.execute(
+            "UPDATE action SET outcome = jsonb_set(outcome, '{deliverables}', "
+            "COALESCE(outcome->'deliverables', '[]'::jsonb) || %s::jsonb) "
+            "WHERE id = %s AND status IN ('queued','running')",
+            (Jsonb([ref]), action_id))
+    add_event(conn, a.issue_id, type="external_changed", actor=actor,
+              action_id=action_id, data={KIND_DELIVERABLE: "attached", **ref})
+    return True
+
+
 def deliverable_arrived(conn, action_id, *, links: dict,
                         actor: str = "tracker") -> bool:
-    """Rule 4: the deliverable (e.g. an opened PR) finishes a live action with
-    its links. Later news about the deliverable belongs on the diary only."""
-    a = get_action(conn, action_id)
-    if a is None or a.status not in ("queued", "running"):
+    """Policy sugar for products whose engagements end at the first
+    deliverable (the grid-map watchdog today): attach + finish succeeded."""
+    if not add_deliverable(conn, action_id, ref=links, actor=actor):
         return False
-    finish(conn, str(action_id), status="succeeded", by=actor, outcome=links)
+    a = get_action(conn, action_id)
+    if a.status in ("queued", "running"):
+        finish(conn, str(action_id), status="succeeded", by=actor, outcome=links)
     return True
 
 
 def reconcile_external(conn, *, action_type: str,
                        fetch_state: Callable[[dict], dict | None],
-                       actor: str = "rule:reconcile") -> dict:
+                       actor: str = "rule:reconcile",
+                       resolved_grace_days: int = 7) -> dict:
     """Rule 5: poll truth for in-flight work. For every action of
     `action_type` whose issue is still open, call `fetch_state(action_dict)`
     — the product's tracker glue — which returns None (no news) or
@@ -88,7 +144,9 @@ def reconcile_external(conn, *, action_type: str,
     idempotently via record_external_change. Never raises past one item."""
     rows = conn.execute(
         "SELECT a.id FROM action a JOIN issue i ON i.id = a.issue_id "
-        "WHERE a.type = %s AND i.state = 'open'", (action_type,)).fetchall()
+        "WHERE a.type = %s AND (i.state = 'open' OR i.resolved_at > "
+        "now() - make_interval(days => %s))",
+        (action_type, resolved_grace_days)).fetchall()
     counts = {"checked": 0, "recovered": 0}
     for r in rows:
         counts["checked"] += 1

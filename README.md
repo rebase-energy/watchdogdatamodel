@@ -18,7 +18,7 @@ weather forecast quality control, customer-facing data-health pages.
 ## Install
 
 ```bash
-pip install "watchdogdatamodel @ git+https://github.com/rebase-energy/watchdogdatamodel@v0.5.0"
+pip install "watchdogdatamodel @ git+https://github.com/rebase-energy/watchdogdatamodel@v0.7.0"
 ```
 
 (Not on PyPI yet. Requires PostgreSQL ≥ 14 and Python ≥ 3.11.)

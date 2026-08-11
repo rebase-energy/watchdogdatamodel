@@ -12,6 +12,9 @@ lands where, what dedups, what frees a slot, how lost deliveries are recovered
 4. The deliverable's arrival finishes the action; later news is diary-only.
 5. Webhooks give latency, POLLING gives truth: deliveries get lost (a fix's
    merge can restart the very receiver that would record it) — reconcile.
+6. DIAGNOSIS IS A DELIVERABLE; ending an engagement never requires closing
+   the ticket (ticket closure is a product/human decision). A findings-only
+   conclusion attaches its artifact and finishes — it never just vanishes.
 """
 from __future__ import annotations
 
@@ -145,6 +148,28 @@ def add_deliverable(conn, action_id, *, ref: dict,
             (Jsonb([ref]), action_id))
     add_event(conn, a.issue_id, type="external_changed", actor=actor,
               action_id=action_id, data={KIND_DELIVERABLE: "attached", **ref})
+    return True
+
+
+def deliver_findings(conn, action_id, *, ref: dict,
+                     reason: str = "diagnosed", actor: str = "agent") -> bool:
+    """Rule 6 (Davide, 2026-08-11): DIAGNOSIS IS A DELIVERABLE, and ending an
+    engagement never requires closing the ticket. An investigation that
+    concludes without a code artifact attaches its findings (a comment, a
+    report — any linkable ref) and finishes succeeded. What happens to the
+    external ticket afterwards is a product/human decision this helper
+    deliberately cannot make — it has no close parameter.
+
+    Returns False when the action is missing or already terminal (late or
+    duplicate deliveries stay diary-only via record_external_change)."""
+    a = get_action(conn, action_id)
+    if a is None or a.status not in ("queued", "running"):
+        return False
+    add_deliverable(conn, action_id, ref={"kind": "findings", **ref}, actor=actor)
+    outcome = {"result": reason}
+    if ref.get("url"):
+        outcome["findings_url"] = ref["url"]
+    finish(conn, str(action_id), status="succeeded", by=actor, outcome=outcome)
     return True
 
 

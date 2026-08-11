@@ -108,3 +108,19 @@ def test_claim_next_is_the_queue_and_respects_max_inflight(action):
     assert a2 is not None and str(a2.id) == str(a2q.id)
     # drained queue -> None, capped or not
     assert trackers.claim_next(conn, "agent_investigation", worker="w2") is None
+
+
+def test_rule6_diagnosis_is_a_deliverable_and_never_closes(action):
+    conn, aid, iid = action
+    assert trackers.deliver_findings(conn, aid, ref={"id": 9, "url": "x/c/9"})
+    row = conn.execute("SELECT status, outcome FROM action WHERE id=%s",
+                       (aid,)).fetchone()
+    assert row["status"] == "succeeded"
+    assert row["outcome"]["result"] == "diagnosed"
+    assert row["outcome"]["findings_url"] == "x/c/9"
+    assert [d["id"] for d in row["outcome"]["deliverables"]] == [9]
+    assert row["outcome"]["deliverables"][0]["kind"] == "findings"
+    # the helper cannot close tickets: nothing in outcome claims a state
+    assert "issue_state" not in row["outcome"]
+    # terminal now: late findings are refused (diary-only path remains)
+    assert not trackers.deliver_findings(conn, aid, ref={"id": 10, "url": "x/c/10"})

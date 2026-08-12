@@ -17,9 +17,17 @@ def get_action(conn, action_id) -> Action | None:
     return Action(**row) if row else None
 
 
-def enqueue(conn, issue_id, type, *, requested_by, params=None) -> tuple[Action, bool]:
+def enqueue(conn, issue_id, type, *, requested_by, params=None,
+            allow_context=False) -> tuple[Action, bool]:
     """Queue an action. A live (queued/running) duplicate makes this a no-op
-    that returns the existing action (spec §3.6 idempotency rule)."""
+    that returns the existing action (spec §3.6 idempotency rule).
+
+    kind='context' issues are observations, not work (spec §2.6): enqueue
+    refuses them unless the caller explicitly overrides with allow_context."""
+    row = conn.execute("SELECT kind FROM issue WHERE id = %s", (issue_id,)).fetchone()
+    if row is not None and row["kind"] == "context" and not allow_context:
+        raise ValueError(
+            "context findings are not actionable (pass allow_context=True to override)")
     with tx(conn), conn.transaction():
         row = conn.execute(
             """
@@ -47,14 +55,19 @@ def enqueue(conn, issue_id, type, *, requested_by, params=None) -> tuple[Action,
 
 
 def claim_next(conn, type, *, worker) -> Action | None:
-    """Worker loop: claim the oldest queued action of this type, if any."""
+    """Worker loop: claim the oldest queued action of this type, if any.
+
+    Joins issue and only claims actions whose issue is kind='issue' — context
+    findings are observations, not work (spec §2.6), so this is the single
+    chokepoint that keeps every claim path kind-safe."""
     row = conn.execute(
         """
         UPDATE action SET status = 'running', started_at = now(),
                transitions = transitions || %s::jsonb
         WHERE id = (
-            SELECT id FROM action WHERE status = 'queued' AND type = %s
-            ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED
+            SELECT a.id FROM action a JOIN issue i ON i.id = a.issue_id
+            WHERE a.status = 'queued' AND a.type = %s AND i.kind = 'issue'
+            ORDER BY a.created_at LIMIT 1 FOR UPDATE OF a SKIP LOCKED
         )
         RETURNING *
         """,

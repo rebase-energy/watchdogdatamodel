@@ -6,7 +6,7 @@ from .fingerprint import compute_fingerprint
 from .scope import scope_covers, validate_scope
 from .wire import dump_timeseries, load_timeseries
 
-__version__ = "0.5.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "models", "store", "excerpt", "ReadOnly", "compute_fingerprint",

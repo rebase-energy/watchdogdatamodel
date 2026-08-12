@@ -24,6 +24,9 @@ def enqueue(conn, issue_id, type, *, requested_by, params=None,
 
     kind='context' issues are observations, not work (spec §2.6): enqueue
     refuses them unless the caller explicitly overrides with allow_context.
+    The override implies the caller EXECUTES the action directly: claim_next
+    deliberately never serves context-issue actions, so a poll-based executor
+    will not pick an overridden one up.
     The guard's SELECT takes FOR KEY SHARE (not FOR UPDATE) inside this
     transaction: it still conflicts with reclassify()'s FOR UPDATE on the
     same issue row (TOCTOU stays closed), but FOR KEY SHARE is compatible

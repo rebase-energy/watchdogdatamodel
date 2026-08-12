@@ -1,4 +1,4 @@
-"""Per-detection observations + kind-aware open accessors (spec §5.2)."""
+"""Per-detection observations + kind-aware open accessors (watchdog-rethink design, 2026-08-12)."""
 from tests.dbsupport import requires_db
 from watchdogdatamodel import compute_fingerprint
 from watchdogdatamodel.store.issues import (

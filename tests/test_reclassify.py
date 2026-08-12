@@ -1,4 +1,4 @@
-"""reclassify(): the only legal kind flip (spec §5.2)."""
+"""reclassify(): the only legal kind flip (watchdog-rethink design, 2026-08-12)."""
 import pytest
 from tests.dbsupport import requires_db
 from watchdogdatamodel import compute_fingerprint

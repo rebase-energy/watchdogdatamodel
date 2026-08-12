@@ -15,6 +15,11 @@ lands where, what dedups, what frees a slot, how lost deliveries are recovered
 6. DIAGNOSIS IS A DELIVERABLE; ending an engagement never requires closing
    the ticket (ticket closure is a product/human decision). A findings-only
    conclusion attaches its artifact and finishes — it never just vanishes.
+7. CONTEXT IS NOT WORK: kind='context' rows are true observations that are
+   by protocol not actionable — claim_next never serves them, caps never
+   count them, enqueue refuses them without an explicit override, and the
+   only legal kind change is store.issues.reclassify() (a resolve+reopen
+   "flip" closes tracker tickets as if fixed and re-files duplicates).
 """
 from __future__ import annotations
 

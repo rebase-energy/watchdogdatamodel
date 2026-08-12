@@ -39,8 +39,9 @@ def open_or_touch(conn, *, fingerprint, origin, title, actor, severity="medium",
     rewrites details (evidence stays frozen at detection, spec §3.4).
 
     ``observation``, when given, is recorded as a per-detection ``issue_event``
-    of type "observation" on BOTH open and touch (spec §5.2) — it never
-    touches the frozen ``issue.details`` row.
+    of type "observation" on BOTH open and touch (watchdog-rethink design,
+    2026-08-12 (power-system-data docs/superpowers/specs/2026-08-12-watchdog-rethink-design.md))
+    — it never touches the frozen ``issue.details`` row.
     """
     with tx(conn), conn.transaction():
         row = conn.execute(
@@ -126,11 +127,12 @@ def resolve(conn, issue_id, *, reason, actor, comment=None) -> Issue:
 
 
 def reclassify(conn, issue_id, *, kind, actor, reason=None) -> Issue:
-    """The ONLY legal kind change (spec §5.2). A resolve+reopen 'flip' would
-    auto-close linked tracker tickets as if fixed and re-file duplicates —
-    the 'same bug filed 5x' failure. This mutates kind in place, diaries the
-    transition, and touches nothing else: actions, stage, evidence, and
-    first_seen_at all survive."""
+    """The ONLY legal kind change (watchdog-rethink design, 2026-08-12
+    (power-system-data docs/superpowers/specs/2026-08-12-watchdog-rethink-design.md)).
+    A resolve+reopen 'flip' would auto-close linked tracker tickets as if
+    fixed and re-file duplicates — the 'same bug filed 5x' failure. This
+    mutates kind in place, diaries the transition, and touches nothing
+    else: actions, stage, evidence, and first_seen_at all survive."""
     if kind not in ("issue", "context"):
         raise ValueError(f"unknown kind {kind!r}")
     with tx(conn), conn.transaction():
@@ -183,8 +185,9 @@ def set_stage(conn, issue_id, *, stage, actor) -> Issue:
 
 
 def latest_observation(conn, issue_id) -> dict | None:
-    """Data of the newest per-detection observation (spec §5.2): kind,
-    severity, and heal windows are driven from HERE, not the frozen row."""
+    """Data of the newest per-detection observation (watchdog-rethink design,
+    2026-08-12 (power-system-data docs/superpowers/specs/2026-08-12-watchdog-rethink-design.md)):
+    kind, severity, and heal windows are driven from HERE, not the frozen row."""
     row = conn.execute(
         "SELECT data FROM issue_event WHERE issue_id = %s AND type = 'observation' "
         "ORDER BY id DESC LIMIT 1", (issue_id,)).fetchone()

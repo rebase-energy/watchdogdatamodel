@@ -46,11 +46,21 @@ check ─── catalog of tests
 (name, unit, frequency, timezone) plus free-form product labels such as
 `{zone: SE-SE1, source: entsoe}`. When the same signal is fetched from
 several sources, each signal × source pair is its own row, because each feed
-can break independently.
+can break independently. One label key is reserved by convention (not
+enforced by the schema): `labels['class']` names what the series *is* in the
+product's own vocabulary — the grid-map watchdog uses `raw`/`post_processed`
+— so checks can key applicability off it without every adopter inventing a
+different word for the same distinction.
 
 **`check`** — the catalog of tests that can run (freshness, value range,
 agreement between sources…). Each check has a stable, human-chosen string id;
 the code that performs the check lives in the product, not in this database.
+`default_params` may declare an `applies_to` convention, `{class: "issue" |
+"context"}` — which `series.labels['class']` values this check's findings are
+actionable (`issue`) versus a true-but-not-actionable observation (`context`)
+for, by default. That default is a starting point, not a guarantee: what a
+run actually found applicable is recorded per-run in `check_run.stats`, not
+assumed from the declaration.
 
 **`check_run`** — one execution of checks over a scope declared before
 running. Passing results are not stored: a series counts as healthy when a
@@ -65,10 +75,24 @@ update the existing issue instead of duplicating it. A problem that returns
 after resolution becomes a new issue linked to its predecessor. State is
 `open`/`resolved`; a separate free-text stage holds the product's workflow
 step. Resolving requires a reason (`fixed`, `recovered`, `false_positive`, …).
+A `kind` column (`'issue'` | `'context'`, default `'issue'`) separates
+actionable work from true observations that are by protocol not work:
+`kind='context'` findings are never served by `claim_next`, never counted
+against `max_inflight` caps, and refused by the enqueue guard unless the
+caller explicitly overrides it. The only legal transition between kinds is
+`store.issues.reclassify()` (diaries a `kind_changed` event in place — a
+resolve+reopen "flip" would instead auto-close linked tracker tickets and
+re-file duplicates). Full rules in the `watchdogdatamodel.trackers` module
+docstring (rule 7).
 
 **`issue_event`** — an append-only diary of everything that happens to an
 issue: opened, detected again, stage changed, fix attempted, external tracker
-news, resolved. Each row records the time and the actor.
+news, resolved. Each row records the time and the actor. A per-detection
+`observation` event (`{severity, verdict_summary, ...}`), recorded on both
+open and touch when the caller supplies one, is the live read for
+kind/severity/heal decisions — `store.issues.latest_observation()` returns
+the newest one — while `issue.details` and the row's originally-detected
+severity stay frozen as evidence of the first detection.
 
 **`action`** — a typed work queue of remediation attempts, always attached to
 an issue. Products register their own types (the watchdog ships `backfill`
@@ -177,6 +201,7 @@ timedatamodel (TimeDB, energydb) is compatible by construction.
 | v0.5 | protocol v2: canonical kinds, UUID stamping, attach-not-finish deliverables, reconcile grace window |
 | v0.6 | executor support: `trackers.claim_next` (queue-claim with `max_inflight`), `ReadOnly.work_order` |
 | v0.7 | rule 6: `trackers.deliver_findings` — diagnosis is a deliverable; engagement end never closes the ticket |
+| v0.8 | `issue.kind` (rule 7: context is not work), per-detection `observation` events, `reclassify()`, kind-aware `ReadOnly` SDK |
 
 ## Tests
 

@@ -32,11 +32,16 @@ def get_issue(conn, issue_id) -> Issue | None:
 def open_or_touch(conn, *, fingerprint, origin, title, actor, severity="medium",
                   stage="new", series_id=None, related_series=None, check_id=None,
                   run_id=None, details=None, valid_start=None, valid_end=None,
-                  knowledge_time=None) -> tuple[Issue, bool]:
+                  knowledge_time=None, kind="issue", observation=None) -> tuple[Issue, bool]:
     """Open a new issue, or touch the open one with this fingerprint.
 
     Touching bumps last_seen_at and records a detected_again event; it never
     rewrites details (evidence stays frozen at detection, spec §3.4).
+
+    ``observation``, when given, is recorded as a per-detection ``issue_event``
+    of type "observation" on BOTH open and touch (watchdog-rethink design,
+    2026-08-12 (power-system-data docs/superpowers/specs/2026-08-12-watchdog-rethink-design.md))
+    — it never touches the frozen ``issue.details`` row.
     """
     with tx(conn), conn.transaction():
         row = conn.execute(
@@ -52,6 +57,9 @@ def open_or_touch(conn, *, fingerprint, origin, title, actor, severity="medium",
                 (row["id"],),
             ).fetchone()
             add_event(conn, row["id"], type="detected_again", actor=actor, run_id=run_id)
+            if observation is not None:
+                add_event(conn, row["id"], type="observation", actor=actor,
+                          run_id=run_id, data=observation)
             return Issue(**updated), False
 
         pred = conn.execute(
@@ -66,25 +74,28 @@ def open_or_touch(conn, *, fingerprint, origin, title, actor, severity="medium",
                 """
                 INSERT INTO issue (fingerprint, origin, series_id, related_series, check_id,
                                    stage, severity, title, details, valid_start, valid_end,
-                                   knowledge_time, detected_by_run, predecessor_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   knowledge_time, detected_by_run, predecessor_id, kind)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (fingerprint, origin, series_id, Jsonb(related_series or []), check_id,
                  stage, severity, title, Jsonb(details or {}), valid_start, valid_end,
-                 knowledge_time, run_id, pred["id"] if pred else None),
+                 knowledge_time, run_id, pred["id"] if pred else None, kind),
             ).fetchone()
         except psycopg.errors.UniqueViolation:
             created = None  # lost a race with a concurrent opener; retry as touch
         else:
             add_event(conn, created["id"], type="opened", actor=actor, run_id=run_id)
+            if observation is not None:
+                add_event(conn, created["id"], type="observation", actor=actor,
+                          run_id=run_id, data=observation)
             return Issue(**created), True
     return open_or_touch(
         conn, fingerprint=fingerprint, origin=origin, title=title, actor=actor,
         severity=severity, stage=stage, series_id=series_id,
         related_series=related_series, check_id=check_id, run_id=run_id,
         details=details, valid_start=valid_start, valid_end=valid_end,
-        knowledge_time=knowledge_time,
+        knowledge_time=knowledge_time, kind=kind, observation=observation,
     )
 
 
@@ -112,6 +123,31 @@ def resolve(conn, issue_id, *, reason, actor, comment=None) -> Issue:
             raise ValueError(f"issue {issue_id} is not open")
         add_event(conn, issue_id, type="resolved", actor=actor,
                   data={"reason": reason, "comment": comment})
+    return Issue(**row)
+
+
+def reclassify(conn, issue_id, *, kind, actor, reason=None) -> Issue:
+    """The ONLY legal kind change (watchdog-rethink design, 2026-08-12
+    (power-system-data docs/superpowers/specs/2026-08-12-watchdog-rethink-design.md)).
+    A resolve+reopen 'flip' would auto-close linked tracker tickets as if
+    fixed and re-file duplicates — the 'same bug filed 5x' failure. This
+    mutates kind in place, diaries the transition, and touches nothing
+    else: actions, stage, evidence, and first_seen_at all survive."""
+    if kind not in ("issue", "context"):
+        raise ValueError(f"unknown kind {kind!r}")
+    with tx(conn), conn.transaction():
+        old = conn.execute(
+            "SELECT kind FROM issue WHERE id = %s AND state = 'open' FOR UPDATE",
+            (issue_id,)).fetchone()
+        if old is None:
+            raise ValueError(f"issue {issue_id} is not open")
+        if old["kind"] == kind:
+            raise ValueError(f"issue {issue_id} already has kind {kind!r}")
+        row = conn.execute(
+            "UPDATE issue SET kind = %s, updated_at = now() WHERE id = %s RETURNING *",
+            (kind, issue_id)).fetchone()
+        add_event(conn, issue_id, type="kind_changed", actor=actor,
+                  data={"from": old["kind"], "to": kind, "reason": reason})
     return Issue(**row)
 
 
@@ -146,3 +182,32 @@ def set_stage(conn, issue_id, *, stage, actor) -> Issue:
         add_event(conn, issue_id, type="stage_changed", actor=actor,
                   data={"from": old["stage"], "to": stage})
     return Issue(**row)
+
+
+def latest_observation(conn, issue_id) -> dict | None:
+    """Data of the newest per-detection observation (watchdog-rethink design,
+    2026-08-12 (power-system-data docs/superpowers/specs/2026-08-12-watchdog-rethink-design.md)):
+    kind, severity, and heal windows are driven from HERE, not the frozen row."""
+    row = conn.execute(
+        "SELECT data FROM issue_event WHERE issue_id = %s AND type = 'observation' "
+        "ORDER BY id DESC LIMIT 1", (issue_id,)).fetchone()
+    return row["data"] if row else None
+
+
+def _open_by_kind(conn, kind, *, series_id=None, check_id=None) -> list[dict]:
+    q, p = "SELECT * FROM issue WHERE state = 'open' AND kind = %s", [kind]
+    if series_id is not None:
+        q += " AND series_id = %s"; p.append(series_id)
+    if check_id is not None:
+        q += " AND check_id = %s"; p.append(check_id)
+    return conn.execute(q + " ORDER BY first_seen_at", p).fetchall()
+
+
+def open_actionable(conn, *, series_id=None, check_id=None) -> list[dict]:
+    """THE sanctioned way to read open work. Context rows never appear here."""
+    return _open_by_kind(conn, "issue", series_id=series_id, check_id=check_id)
+
+
+def open_context(conn, *, series_id=None, check_id=None) -> list[dict]:
+    """Open context findings (true, not actionable): the upstream layer."""
+    return _open_by_kind(conn, "context", series_id=series_id, check_id=check_id)

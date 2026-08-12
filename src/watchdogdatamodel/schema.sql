@@ -79,6 +79,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS issue_one_open_per_fingerprint
 CREATE INDEX IF NOT EXISTS issue_series_idx ON issue (series_id);
 CREATE INDEX IF NOT EXISTS issue_board_idx ON issue (state, stage);
 
+-- Watchdog rethink (2026-08-12): 'issue' = actionable by us; 'context' = a
+-- true observation that is by protocol NOT work (upstream's problem). One
+-- open row per fingerprint still holds: any local evidence => kind='issue'.
+ALTER TABLE issue ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'issue';
+DO $$ BEGIN
+    ALTER TABLE issue ADD CONSTRAINT issue_kind_check CHECK (kind IN ('issue', 'context'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS issue_kind_idx ON issue (kind) WHERE state = 'open';
+
 CREATE TABLE IF NOT EXISTS action (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     issue_id     uuid NOT NULL REFERENCES issue(id),

@@ -82,7 +82,8 @@ class ReadOnly:
 
     # ── issues ──────────────────────────────────────────────────────────
     def list_issues(self, state: str = "open", check_id: str | None = None,
-                    labels: dict | None = None, limit: int = 100) -> list[dict]:
+                    labels: dict | None = None, kind: str | None = None,
+                    limit: int = 100) -> list[dict]:
         from psycopg.types.json import Jsonb
 
         q = ("SELECT i.*, s.key AS series_key, s.labels AS series_labels "
@@ -95,6 +96,9 @@ class ReadOnly:
         if labels:
             q += " AND s.labels @> %s"
             p.append(Jsonb(labels))
+        if kind:
+            q += " AND i.kind = %s"
+            p.append(kind)
         return self._all(q + " ORDER BY i.last_seen_at DESC LIMIT %s", (*p, limit))
 
     def get_issue(self, issue_id: str) -> dict | None:
@@ -171,7 +175,7 @@ class ReadOnly:
     def situation(self, labels: dict | None = None,
                   check_id: str | None = None) -> str:
         issues = self.list_issues(state="open", check_id=check_id, labels=labels,
-                                  limit=500)
+                                  kind="issue", limit=500)
         by_check: dict[str, list] = {}
         for i in issues:
             by_check.setdefault(i.get("check_id") or i["origin"], []).append(i)
@@ -184,6 +188,11 @@ class ReadOnly:
             if len(group) > 5:
                 lines.append(f"- … {len(group) - 5} more omitted")
             out.append("\n".join(lines))
+        n_ctx = self._all(
+            "SELECT count(*) AS n FROM issue WHERE state='open' AND kind='context'")
+        if n_ctx and n_ctx[0]["n"]:
+            out.append(f"_{n_ctx[0]['n']} open context findings "
+                       f"(upstream's problems — visible, not actionable) omitted._")
         runs = self.list_runs(limit=3)
         out.append("## Recent runs\n" + "\n".join(
             f"- {r['status']} · {r['trigger']} · started {_ts(r['started_at'])}"
@@ -192,14 +201,19 @@ class ReadOnly:
 
     def summary(self) -> str:
         rows = self._all(
-            "SELECT check_id, severity, count(*) n FROM issue WHERE state='open' "
+            "SELECT check_id, severity, count(*) n FROM issue "
+            "WHERE state='open' AND kind='issue' "
             "GROUP BY 1, 2 ORDER BY n DESC LIMIT 15")
         stages = self._all(
-            "SELECT stage, count(*) n FROM issue WHERE state='open' GROUP BY 1")
+            "SELECT stage, count(*) n FROM issue "
+            "WHERE state='open' AND kind='issue' GROUP BY 1")
+        n_ctx = self._all(
+            "SELECT count(*) AS n FROM issue WHERE state='open' AND kind='context'")
         run = self.list_runs(limit=1)
         out = ["## Watchdog summary", "Open issues by check × severity:"]
         out += [f"- {r['check_id']}: {r['n']} ({r['severity']})" for r in rows]
         out.append("By stage: " + ", ".join(f"{s['stage']}={s['n']}" for s in stages))
+        out.append(f"context findings open: {n_ctx[0]['n'] if n_ctx else 0}")
         if run:
             out.append(f"Last run: {run[0]['status']} ({run[0]['trigger']}) "
                        f"started {_ts(run[0]['started_at'])}")
@@ -260,7 +274,9 @@ def _md_issue(i: dict) -> str:
             f"\n- first seen {_ts(i['first_seen_at'])}, last {_ts(i['last_seen_at'])}"
             f"\n- affected data window: {win}"
             + (f"\n- verdict: {i['details'].get('verdict')}"
-               if (i.get("details") or {}).get("verdict") else ""))
+               if (i.get("details") or {}).get("verdict") else "")
+            + ("\n- **context finding** — true observation, NOT actionable by us"
+               if i.get("kind") == "context" else ""))
 
 
 def _md_timeline(events: list[dict], cap: int) -> str:

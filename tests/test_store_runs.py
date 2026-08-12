@@ -28,6 +28,15 @@ def test_run_lifecycle_and_coverage(conn):
     with pytest.raises(ValueError):
         finish_run(conn, run.id)  # already finished
 
+    # keys-scoped (targeted) runs cover exactly their declared series —
+    # run_covers forwards series.key, so this works without caller plumbing.
+    targeted = start_run(conn, scope={"series": {"keys": ["k1"]}, "checks": "all"},
+                         trigger="targeted")
+    targeted = finish_run(conn, targeted.id, stats={})
+    assert run_covers(targeted, series=s, check_id="freshness")
+    other = upsert_series(conn, key="k2", name="n2", labels={"zone": "FI"})
+    assert not run_covers(targeted, series=other, check_id="freshness")
+
 
 def test_bad_scope_rejected(conn):
     from watchdogdatamodel.store.runs import start_run

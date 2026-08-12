@@ -12,6 +12,7 @@ CORE_EVENT_TYPES = frozenset(
     {
         "opened", "detected_again", "not_seen", "stage_changed", "resolved",
         "reopened", "action_requested", "action_finished", "external_changed", "comment",
+        "observation", "kind_changed",
     }
 )
 
@@ -68,6 +69,7 @@ class Issue(_Row):
     related_series: list
     check_id: str | None = None
     state: str
+    kind: str = "issue"
     stage: str
     severity: str
     title: str

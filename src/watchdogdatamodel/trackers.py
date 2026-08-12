@@ -15,6 +15,11 @@ lands where, what dedups, what frees a slot, how lost deliveries are recovered
 6. DIAGNOSIS IS A DELIVERABLE; ending an engagement never requires closing
    the ticket (ticket closure is a product/human decision). A findings-only
    conclusion attaches its artifact and finishes — it never just vanishes.
+7. CONTEXT IS NOT WORK: kind='context' rows are true observations that are
+   by protocol not actionable — claim_next never serves them, caps never
+   count them, enqueue refuses them without an explicit override, and the
+   only legal kind change is store.issues.reclassify() (a resolve+reopen
+   "flip" closes tracker tickets as if fixed and re-files duplicates).
 """
 from __future__ import annotations
 
@@ -68,14 +73,20 @@ def claim_next(conn, action_type: str, *, worker: str,
     transaction, so a slot freed by :func:`finish_on_external_close` is seen
     immediately and never double-spent.
 
+    Context findings are observations, not work (spec §2.6): the claim
+    itself (delegated to :func:`store.actions.claim_next`) never serves an
+    action whose issue is ``kind='context'``, and the ``max_inflight``
+    running-count counts only actions on ``kind='issue'`` issues — a
+    context-issue engagement never spends the actionable budget.
+
     Returns the claimed Action (now ``running``, with the worker recorded in
     its transition log), or None — nothing queued, or the budget is spent.
     """
     with tx(conn), conn.transaction():
         if max_inflight is not None:
             n = conn.execute(
-                "SELECT count(*) AS n FROM action "
-                "WHERE type = %s AND status = 'running'",
+                "SELECT count(*) AS n FROM action a JOIN issue i ON i.id = a.issue_id "
+                "WHERE a.type = %s AND a.status = 'running' AND i.kind = 'issue'",
                 (action_type,)).fetchone()["n"]
             if n >= max_inflight:
                 return None

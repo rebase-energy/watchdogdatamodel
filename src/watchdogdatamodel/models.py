@@ -68,6 +68,7 @@ class Issue(_Row):
     related_series: list
     check_id: str | None = None
     state: str
+    kind: str = "issue"
     stage: str
     severity: str
     title: str

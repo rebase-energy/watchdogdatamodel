@@ -32,7 +32,7 @@ def get_issue(conn, issue_id) -> Issue | None:
 def open_or_touch(conn, *, fingerprint, origin, title, actor, severity="medium",
                   stage="new", series_id=None, related_series=None, check_id=None,
                   run_id=None, details=None, valid_start=None, valid_end=None,
-                  knowledge_time=None) -> tuple[Issue, bool]:
+                  knowledge_time=None, kind="issue") -> tuple[Issue, bool]:
     """Open a new issue, or touch the open one with this fingerprint.
 
     Touching bumps last_seen_at and records a detected_again event; it never
@@ -66,13 +66,13 @@ def open_or_touch(conn, *, fingerprint, origin, title, actor, severity="medium",
                 """
                 INSERT INTO issue (fingerprint, origin, series_id, related_series, check_id,
                                    stage, severity, title, details, valid_start, valid_end,
-                                   knowledge_time, detected_by_run, predecessor_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   knowledge_time, detected_by_run, predecessor_id, kind)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (fingerprint, origin, series_id, Jsonb(related_series or []), check_id,
                  stage, severity, title, Jsonb(details or {}), valid_start, valid_end,
-                 knowledge_time, run_id, pred["id"] if pred else None),
+                 knowledge_time, run_id, pred["id"] if pred else None, kind),
             ).fetchone()
         except psycopg.errors.UniqueViolation:
             created = None  # lost a race with a concurrent opener; retry as touch
@@ -84,7 +84,7 @@ def open_or_touch(conn, *, fingerprint, origin, title, actor, severity="medium",
         severity=severity, stage=stage, series_id=series_id,
         related_series=related_series, check_id=check_id, run_id=run_id,
         details=details, valid_start=valid_start, valid_end=valid_end,
-        knowledge_time=knowledge_time,
+        knowledge_time=knowledge_time, kind=kind,
     )
 
 

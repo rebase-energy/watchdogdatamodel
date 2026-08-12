@@ -23,12 +23,17 @@ def enqueue(conn, issue_id, type, *, requested_by, params=None,
     that returns the existing action (spec §3.6 idempotency rule).
 
     kind='context' issues are observations, not work (spec §2.6): enqueue
-    refuses them unless the caller explicitly overrides with allow_context."""
-    row = conn.execute("SELECT kind FROM issue WHERE id = %s", (issue_id,)).fetchone()
-    if row is not None and row["kind"] == "context" and not allow_context:
-        raise ValueError(
-            "context findings are not actionable (pass allow_context=True to override)")
+    refuses them unless the caller explicitly overrides with allow_context.
+    The guard's SELECT takes FOR UPDATE inside this transaction so it
+    serializes against reclassify()'s own FOR UPDATE on the issue row —
+    a concurrent context->issue or issue->context flip can't race past it."""
     with tx(conn), conn.transaction():
+        guard = conn.execute(
+            "SELECT kind FROM issue WHERE id = %s FOR UPDATE", (issue_id,)
+        ).fetchone()
+        if guard is not None and guard["kind"] == "context" and not allow_context:
+            raise ValueError(
+                "context findings are not actionable (pass allow_context=True to override)")
         row = conn.execute(
             """
             INSERT INTO action (issue_id, type, params, requested_by, transitions)

@@ -125,6 +125,30 @@ def resolve(conn, issue_id, *, reason, actor, comment=None) -> Issue:
     return Issue(**row)
 
 
+def reclassify(conn, issue_id, *, kind, actor, reason=None) -> Issue:
+    """The ONLY legal kind change (spec §5.2). A resolve+reopen 'flip' would
+    auto-close linked tracker tickets as if fixed and re-file duplicates —
+    the 'same bug filed 5x' failure. This mutates kind in place, diaries the
+    transition, and touches nothing else: actions, stage, evidence, and
+    first_seen_at all survive."""
+    if kind not in ("issue", "context"):
+        raise ValueError(f"unknown kind {kind!r}")
+    with tx(conn), conn.transaction():
+        old = conn.execute(
+            "SELECT kind FROM issue WHERE id = %s AND state = 'open' FOR UPDATE",
+            (issue_id,)).fetchone()
+        if old is None:
+            raise ValueError(f"issue {issue_id} is not open")
+        if old["kind"] == kind:
+            raise ValueError(f"issue {issue_id} already has kind {kind!r}")
+        row = conn.execute(
+            "UPDATE issue SET kind = %s, updated_at = now() WHERE id = %s RETURNING *",
+            (kind, issue_id)).fetchone()
+        add_event(conn, issue_id, type="kind_changed", actor=actor,
+                  data={"from": old["kind"], "to": kind, "reason": reason})
+    return Issue(**row)
+
+
 def reopen(conn, issue_id, *, actor, comment=None) -> Issue:
     """Human-initiated only (spec §3.4): automatic recurrence opens a new issue."""
     with tx(conn), conn.transaction():

@@ -39,4 +39,5 @@ def run_covers(run: CheckRun, *, series: Series, check_id: str) -> bool:
     """The coverage rule: only completed runs cover anything."""
     if run.status != "completed":
         return False
-    return scope_covers(run.scope, series_id=str(series.id), labels=series.labels, check_id=check_id)
+    return scope_covers(run.scope, series_id=str(series.id), labels=series.labels,
+                        check_id=check_id, series_key=series.key)

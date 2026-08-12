@@ -11,7 +11,9 @@ def validate_scope(scope: dict) -> dict:
     series = scope["series"]
     if series != "all":
         if not isinstance(series, dict) or len(series) != 1:
-            raise ValueError("scope['series'] must be 'all', {'labels': {...}} or {'ids': [...]}")
+            raise ValueError(
+                "scope['series'] must be 'all', {'labels': {...}}, {'ids': [...]} or {'keys': [...]}"
+            )
         (kind, value), = series.items()
         if kind == "labels":
             if not isinstance(value, dict):
@@ -20,6 +22,15 @@ def validate_scope(scope: dict) -> dict:
         elif kind == "ids":
             if not isinstance(value, list) or not all(isinstance(i, str) for i in value):
                 raise ValueError("scope['series']['ids'] must be a list of strings")
+        elif kind == "keys":
+            if (
+                not isinstance(value, list)
+                or not value
+                or not all(isinstance(k, str) and k for k in value)
+            ):
+                raise ValueError(
+                    "scope['series']['keys'] must be a non-empty list of non-empty strings"
+                )
         else:
             raise ValueError(f"unknown series selector {kind!r}")
     checks = scope["checks"]
@@ -30,12 +41,20 @@ def validate_scope(scope: dict) -> dict:
     return scope
 
 
-def scope_covers(scope: dict, *, series_id: str, labels: dict, check_id: str) -> bool:
+def scope_covers(
+    scope: dict, *, series_id: str, labels: dict, check_id: str, series_key: str | None = None
+) -> bool:
+    """`series_key` is optional: callers who don't pass it (e.g. existing ids/labels
+    coverage checks) simply never match a `keys` scope — a keys-scope only covers
+    when the caller supplies the series' natural key to compare against.
+    """
     validate_scope(scope)
     series = scope["series"]
     if series != "all":
         (kind, value), = series.items()
         if kind == "ids" and series_id not in value:
+            return False
+        if kind == "keys" and series_key not in value:
             return False
         if kind == "labels":
             for k, v in value.items():

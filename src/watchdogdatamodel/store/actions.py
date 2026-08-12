@@ -24,12 +24,17 @@ def enqueue(conn, issue_id, type, *, requested_by, params=None,
 
     kind='context' issues are observations, not work (spec §2.6): enqueue
     refuses them unless the caller explicitly overrides with allow_context.
-    The guard's SELECT takes FOR UPDATE inside this transaction so it
-    serializes against reclassify()'s own FOR UPDATE on the issue row —
-    a concurrent context->issue or issue->context flip can't race past it."""
+    The guard's SELECT takes FOR KEY SHARE (not FOR UPDATE) inside this
+    transaction: it still conflicts with reclassify()'s FOR UPDATE on the
+    same issue row (TOCTOU stays closed), but FOR KEY SHARE is compatible
+    with the implicit FK-check lock finish()'s add_event() INSERT into
+    issue_event takes on the issue row — FOR UPDATE here would instead
+    deadlock against a concurrent finish() (enqueue locks issue then waits
+    on the action row via ON CONFLICT; finish locks action then waits on
+    the issue row for the FK check)."""
     with tx(conn), conn.transaction():
         guard = conn.execute(
-            "SELECT kind FROM issue WHERE id = %s FOR UPDATE", (issue_id,)
+            "SELECT kind FROM issue WHERE id = %s FOR KEY SHARE", (issue_id,)
         ).fetchone()
         if guard is not None and guard["kind"] == "context" and not allow_context:
             raise ValueError(

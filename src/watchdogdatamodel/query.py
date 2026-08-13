@@ -156,3 +156,89 @@ def get_snapshot(conn, series_key: str) -> dict | None:
         "SELECT sn.* FROM series_snapshot sn JOIN series s ON s.id = sn.series_id "
         "WHERE s.key = %s", (series_key,))
     return r[0] if r else None
+
+
+# ── context / coverage / analytics ─────────────────────────────────
+def series_context(conn, series_key: str) -> list[dict]:
+    """Open context-lane findings for one series: true, upstream-caused, NOT
+    actionable by us. The board and kanban deliberately never paint these."""
+    return _all(conn,
+        "SELECT i.*, s.key AS series_key FROM issue i JOIN series s ON s.id = i.series_id "
+        "WHERE s.key = %s AND i.state = 'open' AND i.kind = 'context' "
+        "ORDER BY i.last_seen_at DESC", (series_key,))
+
+
+def series_issues(conn, series_key: str) -> list[dict]:
+    """Every open issue on one series, both kinds — kind is in the payload."""
+    return _all(conn,
+        "SELECT i.*, s.key AS series_key FROM issue i JOIN series s ON s.id = i.series_id "
+        "WHERE s.key = %s AND i.state = 'open' ORDER BY i.kind, i.last_seen_at DESC",
+        (series_key,))
+
+
+def series_checks(conn, series_key: str) -> dict | None:
+    """Latest per-check outcome for one series, from its snapshot's stats (the
+    main lane). Returns the snapshot's `stats` verbatim plus the window, so a
+    caller sees ran / not-applicable / could-not-run as the run recorded it."""
+    snap = get_snapshot(conn, series_key)
+    if snap is None:
+        return None
+    return {"window_start": snap.get("window_start"), "window_end": snap.get("window_end"),
+            "fetched_at": snap.get("fetched_at"), "stats": snap.get("stats") or {}}
+
+
+def run_covering(conn, series_key: str, check_id: str | None = None) -> dict | None:
+    """The most recent COMPLETED run whose declared scope covers this series —
+    not a global MAX(finished_at). A one-cell targeted run declares a narrow
+    scope, so `latest run` is a per-series question (spec 5.1, scope truth).
+
+    ``scope_covers`` (scope.py) takes keyword args — ``series_id``, ``labels``,
+    ``check_id``, ``series_key`` — not a series dict, so those are unpacked
+    from the looked-up series row rather than passed as one object.
+    """
+    series = get_series(conn, series_key)
+    if series is None:
+        return None
+    from .scope import scope_covers
+
+    rows = _all(conn,
+        "SELECT r.* FROM check_run r WHERE r.status = 'completed' "
+        "ORDER BY r.finished_at DESC NULLS LAST LIMIT 200")
+    for r in rows:
+        if scope_covers(r.get("scope") or {}, series_id=series["id"],
+                        labels=series.get("labels") or {}, check_id=check_id,
+                        series_key=series_key):
+            return r
+    return None
+
+
+def issues_similar(conn, issue_id: str, limit: int = 15) -> list[dict]:
+    """Open issues sharing this issue's series OR its check — the
+    is-it-systemic question. kind is returned so a caller can tell an
+    actionable sibling from an upstream context finding."""
+    me = _all(conn, "SELECT series_id, check_id FROM issue WHERE id = %s", (issue_id,))
+    if not me:
+        return []
+    return _all(conn,
+        "SELECT i.check_id, i.kind, i.severity, i.last_seen_at, s.key AS series_key "
+        "FROM issue i JOIN series s ON s.id = i.series_id "
+        "WHERE i.state = 'open' AND i.id <> %s AND (i.series_id = %s OR i.check_id = %s) "
+        "ORDER BY i.last_seen_at DESC LIMIT %s",
+        (issue_id, me[0]["series_id"], me[0]["check_id"], limit))
+
+
+_STATS_BY = {"check": "i.check_id", "kind": "i.kind", "severity": "i.severity",
+             "zone": "s.labels->>'zone'", "source": "s.labels->>'source'"}
+
+
+def stats(conn, by: str = "check") -> list[dict]:
+    """Open-issue counts grouped by one dimension. Rejects anything outside
+    _STATS_BY — the group expression is interpolated, so it must never come
+    from caller input directly."""
+    col = _STATS_BY.get(by)
+    if col is None:
+        raise ValueError(f"by must be one of {sorted(_STATS_BY)}")
+    return _all(conn,
+        f"SELECT {col} AS group_value, i.kind, count(*) AS n "
+        "FROM issue i LEFT JOIN series s ON s.id = i.series_id "
+        "WHERE i.state = 'open' GROUP BY 1, 2 ORDER BY n DESC")

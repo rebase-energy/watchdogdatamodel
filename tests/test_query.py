@@ -6,6 +6,7 @@ from tests.dbsupport import DSN, requires_db
 from watchdogdatamodel import compute_fingerprint, query
 from watchdogdatamodel.store.checks import upsert_check
 from watchdogdatamodel.store.issues import open_or_touch
+from watchdogdatamodel.store.runs import finish_run, start_run
 from watchdogdatamodel.store.series import upsert_series
 
 pytestmark = requires_db
@@ -55,3 +56,31 @@ def test_list_issues_filters_by_kind(conn, ro_conn):
     context = query.list_issues(ro_conn, state="open", kind="context")
     assert {i["check_id"] for i in issues}.isdisjoint({c["check_id"] for c in context})
     assert all(i["series_key"] for i in issues)  # the series join survives
+
+
+@requires_db
+def test_series_context_returns_only_context_rows(conn, ro_conn):
+    # seed: one kind='issue' row and one kind='context' row on the same series
+    s = _seed(conn)
+    rows = query.series_context(ro_conn, s.key)
+    assert rows, "expected the seeded context finding"
+    assert all(r["kind"] == "context" for r in rows)
+
+
+@requires_db
+def test_run_covering_ignores_runs_that_do_not_cover(conn, ro_conn):
+    # seed: a run scoped to another zone, then a run scoped to this series
+    s = upsert_series(conn, key="GB:consumption:neso", name="x", labels={"zone": "GB"})
+
+    not_covering = start_run(
+        conn, scope={"series": {"labels": {"zone": "FI"}}, "checks": "all"},
+        trigger="scheduled")
+    finish_run(conn, not_covering.id, stats={})
+
+    covering = start_run(
+        conn, scope={"series": {"keys": [s.key]}, "checks": "all"}, trigger="targeted")
+    covering_run_id = finish_run(conn, covering.id, stats={}).id
+
+    got = query.run_covering(ro_conn, s.key)
+    assert got is not None
+    assert got["id"] == str(covering_run_id)

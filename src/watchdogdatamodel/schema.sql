@@ -26,10 +26,17 @@ CREATE TABLE IF NOT EXISTS check_definition (
     dimension      text CHECK (dimension IS NULL OR dimension IN
                      ('completeness', 'freshness', 'validity', 'consistency', 'accuracy')),
     default_params jsonb NOT NULL DEFAULT '{}',
+    contract       jsonb,
     enabled        boolean NOT NULL DEFAULT true,
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now()
 );
+
+-- v0.9: the product's declared contract for this check (asserts, ranked causes,
+-- decision rule, verdict vocabulary, routing). Product-defined content in a
+-- generic slot, like series.labels['class']. Nullable: checks with no contract
+-- (e.g. 'unreachable') simply have none.
+ALTER TABLE check_definition ADD COLUMN IF NOT EXISTS contract jsonb;
 
 CREATE TABLE IF NOT EXISTS check_run (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),

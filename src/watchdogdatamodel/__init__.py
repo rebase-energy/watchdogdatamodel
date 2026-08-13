@@ -1,14 +1,13 @@
 """watchdogdatamodel — generalized data model for timeseries quality ops."""
-from . import models, store
+from . import models, query, store
 from .evidence import excerpt
-from .readonly import ReadOnly
 from .fingerprint import compute_fingerprint
 from .scope import scope_covers, validate_scope
 from .wire import dump_timeseries, load_timeseries
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 __all__ = [
-    "models", "store", "excerpt", "ReadOnly", "compute_fingerprint",
+    "models", "store", "excerpt", "query", "compute_fingerprint",
     "scope_covers", "validate_scope", "dump_timeseries", "load_timeseries",
 ]

@@ -43,6 +43,7 @@ class CheckDef(_Row):
     description: str | None = None
     dimension: str | None = None
     default_params: dict
+    contract: dict | None = None
     enabled: bool
     created_at: datetime
     updated_at: datetime

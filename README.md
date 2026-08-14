@@ -52,15 +52,19 @@ product's own vocabulary — the grid-map watchdog uses `raw`/`post_processed`
 — so checks can key applicability off it without every adopter inventing a
 different word for the same distinction.
 
-**`check`** — the catalog of tests that can run (freshness, value range,
-agreement between sources…). Each check has a stable, human-chosen string id;
-the code that performs the check lives in the product, not in this database.
+**`check`** (table: `check_definition` — `check` is a reserved SQL word) —
+the catalog of tests that can run (freshness, value range, agreement between
+sources…). Each check has a stable, human-chosen string id; the code that
+performs the check lives in the product, not in this database.
 `default_params` may declare an `applies_to` convention, `{class: "issue" |
 "context"}` — which `series.labels['class']` values this check's findings are
 actionable (`issue`) versus a true-but-not-actionable observation (`context`)
 for, by default. That default is a starting point, not a guarantee: what a
 run actually found applicable is recorded per-run in `check_run.stats`, not
-assumed from the declaration.
+assumed from the declaration. Since v0.9, a nullable `contract` column holds
+the product's own declared decision rule for the check — what it asserts,
+its ranked causes, verdict vocabulary, routing — a generic jsonb slot, like
+`series.labels['class']`; most checks still have none.
 
 **`check_run`** — one execution of checks over a scope declared before
 running. Passing results are not stored: a series counts as healthy when a
@@ -120,25 +124,30 @@ conventions — and each has a contract test:
 - the read-only SDK **cannot write** (SELECT-only role recommended, plus a
   server-enforced read-only session, plus a surface with no write functions)
 
-## Reading the database — the SDK and the agent layer
+## Reading the database — the CLI and the query library
 
-`watchdogdatamodel.readonly` is how agents and scripts read a deployment
-safely — no SQL, no writes possible:
+Since v0.9, two read-only surfaces — no SQL, no writes possible — replace
+the old `ReadOnly` composite class:
 
-```python
-from watchdogdatamodel.readonly import ReadOnly
-
-ro = ReadOnly.from_env()                      # WDM_READONLY_PG_DSN
-ro.list_issues(check_id="freshness")          # dicts for code
-print(ro.investigation_brief(issue_id))       # prompt-ready markdown for agents:
-                                              # issue + timeline + past fixes with
-                                              # conclusions + lineage + related
+```bash
+# a read-only CLI, for agents and humans at a terminal
+uv run python -m watchdogdatamodel.cli guide            # packaged agent doctrine
+uv run python -m watchdogdatamodel.cli issue show <id>   # --json for exact fields
 ```
 
-The composites (`investigation_brief`, `history`, `situation`, `summary`)
-render token-budgeted markdown with stable section headers — an investigating
-agent's whole context in one call. Real rendered examples for every function:
-[docs/agent-sdk.md](docs/agent-sdk.md).
+```python
+# the library it's built on, for code
+from watchdogdatamodel import query
+
+conn = query.connect()                        # WDM_READONLY_PG_DSN
+query.list_issues(conn, check_id="freshness")  # JSON-able dicts
+```
+
+An investigating agent runs `cli guide` first — it prints the packaged
+`AGENT.md` doctrine (command surface, the five rules that change
+conclusions, a "start here" recipe) — then decides for itself what else to
+fetch. Nothing pre-selects context anymore. Real captured output for the CLI
+and the library: [docs/agent-sdk.md](docs/agent-sdk.md).
 
 ## External trackers and agent executors
 
@@ -183,10 +192,10 @@ timedatamodel (TimeDB, energydb) is compatible by construction.
 | Doc | Contents |
 |---|---|
 | [docs/adopters-guide.md](docs/adopters-guide.md) | adopt the model in five steps, with a runnable example |
-| [docs/agent-sdk.md](docs/agent-sdk.md) | the read-only SDK, real output examples for every function |
+| [docs/agent-sdk.md](docs/agent-sdk.md) | the read-only CLI and `query` library, real output examples for every command/function |
 | [docs/executor-pattern.md](docs/executor-pattern.md) | interchangeable agent executors |
 | [docs/specs/2026-08-07-quality-ops-data-model-design.md](docs/specs/2026-08-07-quality-ops-data-model-design.md) | the full design: every table, field, rule |
-| [docs/specs/2026-08-10-agent-readonly-layer-design.md](docs/specs/2026-08-10-agent-readonly-layer-design.md) | the agent layer design |
+| [docs/specs/2026-08-10-agent-readonly-layer-design.md](docs/specs/2026-08-10-agent-readonly-layer-design.md) | historical: the original `ReadOnly` composite design (v0.3). Superseded in v0.9 by the CLI + `query` library in [docs/agent-sdk.md](docs/agent-sdk.md); kept as a record, not a current guide. |
 | [docs/presentation.html](docs/presentation.html) | a 6-slide visual introduction |
 | [BRAINSTORM.md](BRAINSTORM.md) | decision history + a survey of how OpenMetadata, DataHub, Soda, Sentry solve the same problems |
 
@@ -202,6 +211,7 @@ timedatamodel (TimeDB, energydb) is compatible by construction.
 | v0.6 | executor support: `trackers.claim_next` (queue-claim with `max_inflight`), `ReadOnly.work_order` |
 | v0.7 | rule 6: `trackers.deliver_findings` — diagnosis is a deliverable; engagement end never closes the ticket |
 | v0.8 | `issue.kind` (rule 7: context is not work), per-detection `observation` events, `reclassify()`, kind-aware `ReadOnly` SDK |
+| v0.9 | `check_definition.contract` (the product's declared decision rule); `ReadOnly` and its markdown composites deleted, replaced by `query.py` (pure functions over a connection) and a read-only `python -m watchdogdatamodel.cli` with a packaged `AGENT.md` — tools and doctrine instead of a pre-rendered brief |
 
 ## Tests
 

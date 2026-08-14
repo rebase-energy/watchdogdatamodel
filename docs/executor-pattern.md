@@ -10,22 +10,42 @@ tracker choice, start signals) live in each product's own contract doc.
 
 - **The model is the queue and the memory.** An investigation is an `action`
   (`type` chosen by the product); dispatch is `claim_next` or watching for
-  running actions. Context is the read-only SDK (`readonly.ReadOnly` —
-  `investigation_brief` is the executor's mandatory first move).
-- **The tracker is the stage.** A ticket carries the work order; deliverables
-  (PRs, patches, reports) live there. The model stores lifecycle + links,
-  never prose.
+  running actions. Context comes from the read-only CLI/library
+  (`watchdogdatamodel.cli` / `query.py`, [agent-sdk.md](agent-sdk.md)) —
+  running `python -m watchdogdatamodel.cli guide` is the *agent's* mandatory
+  first move, not the executor's. As of v0.9.0 the executor doesn't fetch or
+  render context at all; it hands the agent tools and a starting point.
+- **The tracker is the stage.** A ticket carries the correlation stamp and a
+  playbook pointer (see "Starting the agent"); deliverables (PRs, patches,
+  reports) live there. The model stores lifecycle + links, never prose.
 - **The executor is interchangeable.** Hosted workflow, bot assignment, or an
   external harness — downstream of delivery the system cannot tell them apart.
 
-## The work order
+## Starting the agent
 
-The ticket filed for an investigation must contain, executor-agnostically:
+There is no work order file as of v0.9.0. The executor does not fetch or
+render context on the agent's behalf — it hands the agent tools and gets out
+of the way. Concretely, every executor:
+
+1. Creates the sandbox (or claims the next queued `action` via
+   `trackers.claim_next`).
+2. Exports the read-only DSN into the agent's process environment as
+   `WDM_READONLY_PG_DSN` (or `WATCHDOG_READONLY_PG_DSN`).
+3. Tells the agent the issue id, and to run
+   `python -m watchdogdatamodel.cli guide` before anything else. That's the
+   whole briefing — `guide` prints the doctrine (the five rules, the "start
+   here" recipe); the agent decides from there what to look up.
+4. Collects the deliverable when the agent finishes.
+
+The ticket filed for an investigation still carries, executor-agnostically:
 1. `wdm-action: <uuid>` — the correlation stamp (`trackers.stamp`). Exact
    match is the ONLY primary correlation; prose keywords are fallback.
-2. The context brief (e.g. `investigation_brief` output) — evidence at filing.
-3. A task directive shaped by what the model already knows (verdict, history).
-4. A pointer to the product's playbook.
+2. A pointer to the product's playbook.
+
+Two items, not four — the context brief and the task directive aren't
+filing-time artifacts anymore, because there's no pre-rendered context to put
+in them. The agent builds its own picture by calling the CLI (or the
+`query` library directly) against the DSN it was handed.
 
 ## Delivery obligations (every executor, every product)
 
@@ -35,7 +55,8 @@ The ticket filed for an investigation must contain, executor-agnostically:
    ticket; `trackers.finish_on_external_close` settles the action.
 4. **Never resolve issues yourself.** Resolution belongs to the data — a
    clean covering `check_run` decides, not the executor's claim of success.
-5. Scope: the one subject in the work order.
+5. Scope: the one subject the executor pointed it at (the issue id it was
+   handed) — not whatever else the agent found while poking around.
 
 ## Lifecycle mapping
 
@@ -78,8 +99,13 @@ not: instructions are a courtesy, capabilities are the contract.
 **Work orders want to be files.** Concatenating `investigation_brief` +
 `situation` into one markdown file was the agent's entire context and it
 sufficed for a correct, evidence-dense verdict. Shipped in v0.6:
-`ReadOnly.work_order()` renders that bundle in one call, so every executor
-stops hand-assembling it.
+`ReadOnly.work_order()` rendered that bundle in one call, so every executor
+stopped hand-assembling it. *(Superseded in v0.9.0: `ReadOnly` and its
+composites, `work_order` included, are deleted — see "Starting the agent"
+above. The lesson that survived is that an agent's whole context should
+come from one cheap, complete call; the change is that the call is now
+`cli guide` plus whatever the agent itself decides to fetch, not a file the
+executor pre-assembles for it.)*
 
 **The queue is the missing half.** This run was pointed at an issue id by
 hand because no action row existed — which also meant the deliverable could

@@ -5,18 +5,20 @@ from ..models import CheckDef
 
 
 def upsert_check(conn, *, id, name, description=None, dimension=None,
-                 default_params=None, enabled=True) -> CheckDef:
+                 default_params=None, contract=None, enabled=True) -> CheckDef:
     row = conn.execute(
         """
-        INSERT INTO check_definition (id, name, description, dimension, default_params, enabled)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO check_definition (id, name, description, dimension, default_params, contract, enabled)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name, description = EXCLUDED.description,
             dimension = EXCLUDED.dimension, default_params = EXCLUDED.default_params,
+            contract = EXCLUDED.contract,
             enabled = EXCLUDED.enabled, updated_at = now()
         RETURNING *
         """,
-        (id, name, description, dimension, Jsonb(default_params or {}), enabled),
+        (id, name, description, dimension, Jsonb(default_params or {}),
+         Jsonb(contract) if contract is not None else None, enabled),
     ).fetchone()
     return CheckDef(**row)
 

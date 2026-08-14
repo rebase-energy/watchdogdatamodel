@@ -69,18 +69,27 @@ def test_series_context_returns_only_context_rows(conn, ro_conn):
 
 @requires_db
 def test_run_covering_ignores_runs_that_do_not_cover(conn, ro_conn):
-    # seed: a run scoped to another zone, then a run scoped to this series
+    # seed: the COVERING run finishes FIRST, scoped to this series with a
+    # specific (non-"all") check list; a LATER run finishes AFTER it, scoped
+    # to another zone entirely. Only genuine per-series scope evaluation —
+    # not a naive "newest completed run" MAX(finished_at) query — can tell
+    # these apart, since the non-covering run is the more recent of the two.
     s = upsert_series(conn, key="GB:consumption:neso", name="x", labels={"zone": "GB"})
+
+    covering = start_run(
+        conn, scope={"series": {"keys": [s.key]}, "checks": ["timing_gaps"]},
+        trigger="targeted")
+    covering_run_id = finish_run(conn, covering.id, stats={}).id
 
     not_covering = start_run(
         conn, scope={"series": {"labels": {"zone": "FI"}}, "checks": "all"},
         trigger="scheduled")
     finish_run(conn, not_covering.id, stats={})
 
-    covering = start_run(
-        conn, scope={"series": {"keys": [s.key]}, "checks": "all"}, trigger="targeted")
-    covering_run_id = finish_run(conn, covering.id, stats={}).id
-
     got = query.run_covering(ro_conn, s.key)
     assert got is not None
     assert got["id"] == str(covering_run_id)
+    # check_id=None (the default, as used above) ignores the check dimension:
+    # this run declares a specific checks list, ["timing_gaps"], not "all",
+    # and is still the one returned — proving the widened default.
+    assert got["scope"]["checks"] == ["timing_gaps"]

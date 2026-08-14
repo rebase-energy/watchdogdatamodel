@@ -42,11 +42,20 @@ def validate_scope(scope: dict) -> dict:
 
 
 def scope_covers(
-    scope: dict, *, series_id: str, labels: dict, check_id: str, series_key: str | None = None
+    scope: dict, *, series_id: str, labels: dict, check_id: str | None = None,
+    series_key: str | None = None
 ) -> bool:
     """`series_key` is optional: callers who don't pass it (e.g. existing ids/labels
     coverage checks) simply never match a `keys` scope — a keys-scope only covers
     when the caller supplies the series' natural key to compare against.
+
+    `check_id` follows this codebase's convention of ``None`` meaning "no filter
+    — ignore this dimension" (see `query.list_issues`, `store/issues.py`'s
+    `open_actionable`/`open_context`): a scope with a specific `checks` list still
+    covers when `check_id` is omitted, whatever checks it declared. Pass an
+    explicit `check_id` to ask the precise question — "did a run re-check THIS
+    check on this series?" — which is the only case a declared `checks` list can
+    fail to match.
     """
     validate_scope(scope)
     series = scope["series"]
@@ -64,6 +73,6 @@ def scope_covers(
                 elif labels.get(k) != v:
                     return False
     checks = scope["checks"]
-    if checks != "all" and check_id not in checks:
+    if check_id is not None and checks != "all" and check_id not in checks:
         return False
     return True

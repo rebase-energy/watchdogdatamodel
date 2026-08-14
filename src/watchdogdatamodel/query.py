@@ -195,6 +195,26 @@ def run_covering(conn, series_key: str, check_id: str | None = None) -> dict | N
     ``scope_covers`` (scope.py) takes keyword args — ``series_id``, ``labels``,
     ``check_id``, ``series_key`` — not a series dict, so those are unpacked
     from the looked-up series row rather than passed as one object.
+
+    ``check_id`` follows this codebase's "None means no filter" convention
+    (matching `list_issues` and `store/issues.py`'s `open_actionable`/
+    `open_context`):
+
+    - ``check_id=None`` (the default) ignores the check dimension — a run
+      covers the series if its scope covers it, whatever `checks` list it
+      declared. Example: a run scoped to `checks: ["timing_gaps"]` still
+      counts as covering when you just ask "was this series covered at all?"
+    - an explicit ``check_id`` keeps the precise question — "did a run
+      re-check THIS check on this series?" Example: the same run above does
+      NOT cover `check_id="freshness"`, since `"freshness"` isn't in its
+      declared `checks` list.
+
+    Scan bound: only the 200 most-recently-finished completed runs are
+    considered. If none of those cover the series, this returns ``None`` —
+    which is then indistinguishable from "never covered". A series covered
+    only by a completed run older than the 200 most recent is reported as
+    not covered; there is no fallback query for older runs (speed over
+    completeness, deliberately — do not add one).
     """
     series = get_series(conn, series_key)
     if series is None:

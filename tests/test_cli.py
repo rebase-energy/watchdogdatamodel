@@ -26,9 +26,15 @@ def _run(args, dsn=None):
 @requires_db
 @pytest.mark.parametrize("args", CMDS, ids=lambda a: "-".join(a))
 def test_command_runs(args):
+    # Exit status only: an empty table is a legitimate answer for the list
+    # commands, and asserting non-empty stdout would make this test depend on
+    # whatever rows other test modules happened to leave behind (they truncate).
+    # `guide` is the one command whose output is data-independent, so it is the
+    # one that must print something.
     res = _run(args, dsn=DSN)
     assert res.returncode == 0, res.stderr
-    assert res.stdout.strip()
+    if args == ["guide"]:
+        assert res.stdout.strip()
 
 
 def test_missing_dsn_is_loud_not_silent():

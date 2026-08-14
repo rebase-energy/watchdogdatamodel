@@ -137,12 +137,19 @@ def _render_issue(i: dict) -> str:
     severity = latest_obs.get("severity") or i.get("severity")
 
     span = f"{i.get('first_seen_at')}→{i.get('last_seen_at')}"
-    verdict = i.get("resolution_reason") or "open"
-    lines = [
-        f"{i.get('id')} · {i.get('check_id')} · kind={i.get('kind')} · "
-        f"severity={severity} · {i.get('state')}/{i.get('stage')} · "
-        f"{span} · verdict={verdict}"
-    ]
+    # The issue's VERDICT is the product's classification of the defect, stored by
+    # the writer in details['verdict'] (e.g. parser_mismatch / db_stale / escalate)
+    # — NOT resolution_reason, which says how a CLOSED issue ended (recovered /
+    # superseded) and is null on every open row. Showing the latter as "verdict"
+    # would print "verdict=open" for every open issue and hide the real one.
+    verdict = (i.get("details") or {}).get("verdict")
+    head = (f"{i.get('id')} · {i.get('check_id')} · kind={i.get('kind')} · "
+            f"severity={severity} · {i.get('state')}/{i.get('stage')} · {span}")
+    if verdict:
+        head += f" · verdict={verdict}"
+    if i.get("resolution_reason"):
+        head += f" · resolved={i['resolution_reason']}"
+    lines = [head]
     series_key = i.get("series_key")
     lines.append(f"  series={series_key} title={i.get('title')}" if series_key
                  else f"  title={i.get('title')}")

@@ -130,13 +130,51 @@ def get_issue(conn, issue_id: str) -> dict | None:
     issue = r[0]
     issue["events"] = list_events(conn, issue_id)
     issue["actions"] = list_actions(conn, issue_id=issue_id)
+    # severity / verdict_summary / human_summary must read the true newest
+    # observation, not whatever `events` happens to hold after its own
+    # LIMIT — see `latest_observation`'s docstring.
+    issue["latest_observation"] = latest_observation(conn, issue_id)
     return issue
 
 
+def get_issue_row(conn, issue_id: str) -> dict | None:
+    """The bare issue row only — no diary, no actions, no series join. A
+    cheap existence check for a caller (e.g. the CLI) that needs to resolve
+    a subject before running a narrower query on it, without paying for the
+    extra queries `get_issue` makes."""
+    r = _all(conn, "SELECT * FROM issue WHERE id = %s", (issue_id,))
+    return r[0] if r else None
+
+
 def list_events(conn, issue_id: str, limit: int = 200) -> list[dict]:
-    return _all(
-        conn, "SELECT * FROM issue_event WHERE issue_id = %s ORDER BY at, id LIMIT %s",
-        (issue_id, limit))
+    """The issue's diary, capped at `limit` — but capped from the NEWEST end.
+
+    The previous ``ORDER BY at, id LIMIT %s`` fetched the OLDEST `limit`
+    events and silently hid everything newer once an issue passed `limit`
+    events, which inverted AGENT.md rule 2 ("read the timeline before
+    trusting details") into "read a timeline that stops days before the
+    issue's most recent activity." Fetching newest-first and reversing keeps
+    the return value chronological (oldest first, as every caller expects
+    for a diary) while guaranteeing the truncation — here or in the CLI's
+    own display cap — always drops from the OLD end, never the new one.
+    """
+    rows = _all(
+        conn, "SELECT * FROM issue_event WHERE issue_id = %s "
+        "ORDER BY at DESC, id DESC LIMIT %s", (issue_id, limit))
+    return list(reversed(rows))
+
+
+def latest_observation(conn, issue_id: str) -> dict | None:
+    """The newest `observation` diary event's timestamp + data. Mirrors
+    `store.issues.latest_observation` (``ORDER BY id DESC LIMIT 1``), with
+    `at` added so a caller can show how current the reading is — used by
+    `get_issue` so severity/verdict_summary/human_summary are read from a
+    single dedicated lookup rather than the (necessarily capped) attached
+    event list, however that list happens to be truncated."""
+    r = _all(conn,
+        "SELECT at, data FROM issue_event WHERE issue_id = %s AND type = 'observation' "
+        "ORDER BY id DESC LIMIT 1", (issue_id,))
+    return r[0] if r else None
 
 
 # ── actions / snapshots ─────────────────────────────────────────────
@@ -235,12 +273,15 @@ def run_covering(conn, series_key: str, check_id: str | None = None) -> dict | N
 def issues_similar(conn, issue_id: str, limit: int = 15) -> list[dict]:
     """Open issues sharing this issue's series OR its check — the
     is-it-systemic question. kind is returned so a caller can tell an
-    actionable sibling from an upstream context finding."""
+    actionable sibling from an upstream context finding. `id` is included —
+    unlike every other row this module returns, which already comes
+    straight from `SELECT i.*` — so a caller that finds a systemic sibling
+    here can `issue show` it without a second lookup just to get its id."""
     me = _all(conn, "SELECT series_id, check_id FROM issue WHERE id = %s", (issue_id,))
     if not me:
         return []
     return _all(conn,
-        "SELECT i.check_id, i.kind, i.severity, i.last_seen_at, s.key AS series_key "
+        "SELECT i.id, i.check_id, i.kind, i.severity, i.last_seen_at, s.key AS series_key "
         "FROM issue i JOIN series s ON s.id = i.series_id "
         "WHERE i.state = 'open' AND i.id <> %s AND (i.series_id = %s OR i.check_id = %s) "
         "ORDER BY i.last_seen_at DESC LIMIT %s",

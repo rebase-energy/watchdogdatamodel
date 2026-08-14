@@ -41,3 +41,57 @@ def test_missing_dsn_is_loud_not_silent():
     res = _run(["issues", "list"], dsn="postgresql://nope@127.0.0.1:1/none_test")
     assert res.returncode == 2
     assert "no wdm access" in (res.stdout + res.stderr).lower()
+
+
+def test_malformed_dsn_is_no_wdm_access_not_a_traceback():
+    # A DSN that isn't `key=value` pairs at all used to fail inside
+    # psycopg.connect with ProgrammingError, a *sibling* of OperationalError
+    # under psycopg.Error rather than a subclass — the narrower except let it
+    # escape as a bare traceback instead of the documented NO_ACCESS path.
+    res = _run(["issues", "list"], dsn="this is not a dsn")
+    assert res.returncode == 2, res.stderr
+    assert "no wdm access" in (res.stdout + res.stderr).lower()
+    assert "Traceback" not in res.stderr
+
+
+@requires_db
+def test_timeline_shows_newest_events_when_truncated(conn):
+    # Regression lock for finding 1: `ORDER BY at, id LIMIT n` fetched the
+    # OLDEST n events and hid everything newer once an issue passed n events
+    # — the exact opposite of what AGENT.md rule 2 tells an agent to trust.
+    from watchdogdatamodel import compute_fingerprint
+    from watchdogdatamodel.store.issues import add_event, open_or_touch
+    from watchdogdatamodel.store.series import upsert_series
+
+    s = upsert_series(conn, key="XX:test:1:t", name="x")
+    issue, _ = open_or_touch(
+        conn, fingerprint=compute_fingerprint(s.key, "t"), origin="check",
+        title="t", actor="t", series_id=s.id)
+    for n in range(25):
+        add_event(conn, issue.id, type="observation", actor="t", data={"n": n})
+    # 26 total events (1 "opened" + 25 "observation"); default --limit is 20.
+
+    res = _run(["issue", "timeline", str(issue.id)], dsn=DSN)
+    assert res.returncode == 0, res.stderr
+    assert "'n': 24}" in res.stdout, "newest observation must be visible"
+    assert "'n': 0}" not in res.stdout, "oldest, not newest, must be dropped"
+    assert "older" in res.stdout.lower()
+
+
+@requires_db
+def test_run_covering_distinguishes_no_such_series_from_not_covered(conn):
+    # Regression lock for finding 2: a series key that doesn't exist at all
+    # used to fall through to the same "(not covered: ...)" text as a real,
+    # never-scanned series — indistinguishable exit-0 outcomes for "you
+    # typo'd the key" and "your evidence about this series may be stale".
+    from watchdogdatamodel.store.series import upsert_series
+
+    upsert_series(conn, key="YY:test:1:t", name="y")
+
+    missing = _run(["run", "covering", "NOPE-DOES-NOT-EXIST"], dsn=DSN)
+    assert missing.returncode == 2
+    assert "no such series" in (missing.stdout + missing.stderr).lower()
+
+    real = _run(["run", "covering", "YY:test:1:t"], dsn=DSN)
+    assert real.returncode == 0
+    assert "not covered" in real.stdout.lower()

@@ -23,11 +23,14 @@ NO_ACCESS = (
     "conclusions as if you had read the record."
 )
 
-# Rows fetched per list-style query, independent of the display cap (--limit).
-# 200 mirrors query.list_series' own default and query.run_covering's scan
-# bound, so "N more (--limit)" is accurate for any realistic result set up to
-# this pool; beyond it the undercount is the same documented trade-off
-# run_covering already makes.
+# Rows fetched per list-style query, independent of the display cap
+# (--limit). 200 mirrors query.run_covering's own scan bound. The CLI always
+# asks for _FETCH_POOL + 1 (see _fetch_pool below) rather than exactly
+# _FETCH_POOL: a plain limit=_FETCH_POOL fetch can't tell "the pool exactly
+# holds every match" apart from "the pool overflowed and hides more" — those
+# two cases used to look identical (no footer either way), which silently
+# broke the "a capped list always says what it dropped" guarantee right at
+# the 200-row boundary.
 _FETCH_POOL = 200
 
 # issue.lineage walks predecessor_id backward; capped defensively so a
@@ -35,33 +38,145 @@ _FETCH_POOL = 200
 _LINEAGE_DEPTH_CAP = 20
 
 
-def _emit(rows, args, render):
+def _fetch_pool(fn, *args, keep: str = "head", **kwargs):
+    """Call one of `query`'s list functions asking for `_FETCH_POOL + 1`
+    rows, so a result that exactly fills the pool can be told apart from one
+    that overflows it.
+
+    Returns `(rows, pool_overflowed)`. `rows` is capped back down to
+    `_FETCH_POOL`, dropped from the front by default (`keep="head"` — every
+    list here is already sorted best-first) or from the back when
+    `keep="tail"` (the timeline: its rows are chronological, oldest first,
+    so the newest ones to keep are at the end). `pool_overflowed` is True
+    iff at least one more row exists beyond that boundary — the caller
+    can't know how many more, only that the true count is unknown.
+    """
+    rows = fn(*args, limit=_FETCH_POOL + 1, **kwargs)
+    if len(rows) > _FETCH_POOL:
+        capped = rows[-_FETCH_POOL:] if keep == "tail" else rows[:_FETCH_POOL]
+        return capped, True
+    return rows, False
+
+
+def _emit(rows, args, render, *, truncate: str = "head", pool_overflowed: bool = False):
     """Print `rows` compactly, or as exact JSON with --json. Never truncate
-    silently: a capped list says what it dropped."""
+    silently, and never claim completeness that wasn't checked: a capped
+    list always says what it dropped, and (for `--json`) flags it too.
+
+    `truncate` picks which end of `rows` survives the `--limit` display cap:
+    "head" (default, keep the first `args.limit`) is right for every list
+    here except the timeline, whose rows are chronological and must keep the
+    newest end (`truncate="tail"`).
+
+    `pool_overflowed`, from `_fetch_pool`, means the fetch itself hit
+    `_FETCH_POOL` — the true total beyond it is unknown, so the footer says
+    "at least N" instead of an exact count, and it prints even when
+    `--limit` is large enough that display alone wouldn't have truncated
+    anything, since the fetch already dropped rows before display ever saw
+    them.
+    """
     if args.json:
-        print(json.dumps(rows, indent=2, default=str))
+        if pool_overflowed:
+            print(json.dumps(
+                {"pool_truncated": True, "fetch_pool": _FETCH_POOL, "rows": rows},
+                indent=2, default=str))
+        else:
+            print(json.dumps(rows, indent=2, default=str))
+        return
+    if rows is None:
+        print("(nothing found)")
         return
     if isinstance(rows, list):
-        shown = rows[: args.limit]
+        if not rows:
+            print("(nothing found)")
+            return
+        if truncate == "tail":
+            shown = rows[-args.limit:] if args.limit > 0 else []
+        else:
+            shown = rows[: args.limit]
         for r in shown:
             print(render(r))
-        if len(rows) > len(shown):
-            print(f"… {len(rows) - len(shown)} more (--limit)")
-    elif rows is None:
-        print("(nothing found)")
+        known_more = len(rows) - len(shown)
+        if pool_overflowed:
+            at_least = known_more + 1
+            if truncate == "tail":
+                print(f"… at least {at_least} older events omitted "
+                      f"(fetch pool {_FETCH_POOL} — narrow with --check / --label)")
+            else:
+                print(f"… at least {at_least} more "
+                      f"(fetch pool {_FETCH_POOL} — narrow with --check / --label)")
+        elif known_more:
+            if truncate == "tail":
+                print(f"… {known_more} older events omitted (--limit)")
+            else:
+                print(f"… {known_more} more (--limit)")
     else:
         print(render(rows))
+
+
+def _no_such(args, kind: str, ident: str, list_hint: str) -> int:
+    """The one lookup-miss reporter every id/key-taking command uses —
+    distinct from "(nothing found)", which means the subject exists but has
+    nothing to show. Always exits 2, like NO_ACCESS: both mean "this answer
+    isn't real, don't reason from it." `--json` gets a machine-readable
+    error object instead of silence, so a script reading JSON output can't
+    mistake a lookup failure for a legitimately empty result either."""
+    if args.json:
+        print(json.dumps({"error": f"no_such_{kind}", "key": ident}, indent=2))
+    else:
+        print(f"(no such {kind}: {ident!r} — list with `{list_hint}`)", file=sys.stderr)
+    return 2
+
+
+def _require_series(conn, args) -> dict | None:
+    """Resolve `args.key` to a series row, or report the lookup miss and
+    leave it to the caller to `return 2`. Every series-scoped command must
+    call this before running its narrower query — otherwise a typo'd key
+    returns the same empty/None result as a real series with nothing to
+    show, and reads as "all clear" instead of "wrong key" (finding 5)."""
+    series = query.get_series(conn, args.key)
+    if series is None:
+        _no_such(args, "series", args.key, "series list")
+    return series
+
+
+def _require_issue_row(conn, args) -> dict | None:
+    """Resolve `args.issue_id` to a bare issue row (no diary, no actions —
+    see `query.get_issue_row`), or report the lookup miss. Same rationale as
+    `_require_series`: an issue id that doesn't exist must never look like
+    an issue that exists but has an empty timeline/no similar issues."""
+    row = query.get_issue_row(conn, args.issue_id)
+    if row is None:
+        _no_such(args, "issue", args.issue_id, "issue list")
+    return row
 
 
 def _with_conn(fn):
     """Wrap a handler needing `conn` as its first argument: opens the
     connection, turning a missing DSN or a failed connect into exit 2 with
-    the NO_ACCESS message, and always closes the connection afterwards."""
+    the NO_ACCESS message, and always closes the connection afterwards.
+
+    Catches `psycopg.Error`, not just `OperationalError`: a malformed DSN
+    (e.g. a plain string with no `key=value` pairs) fails inside
+    `psycopg.connect` itself with `ProgrammingError`, a sibling of
+    `OperationalError` under `psycopg.Error`, not a subclass of it — the
+    narrower catch let that one escape as a bare traceback instead of
+    NO_ACCESS. The one-row probe below catches the other gap: a DSN that
+    resolves to a real, reachable, but non-wdm database connects fine (there
+    is nothing wdm-specific to fail at connect time) and only breaks later,
+    inside whatever query the command happens to run, as `UndefinedTable` —
+    also a `psycopg.Error`, so probing here folds it into the same NO_ACCESS
+    path instead of leaking a traceback deep inside a handler.
+    """
 
     def wrapper(args):
+        conn = None
         try:
             conn = query.connect(args.dsn)
-        except (RuntimeError, psycopg.OperationalError) as e:
+            conn.execute("SELECT 1 FROM issue LIMIT 0")
+        except (RuntimeError, psycopg.Error) as e:
+            if conn is not None:
+                conn.close()
             print(NO_ACCESS.format(err=e), file=sys.stderr)
             return 2
         try:
@@ -127,14 +242,25 @@ def _render_issue(i: dict) -> str:
     # · first→last seen · verdict — kind is always shown; mistaking
     # kind='context' (upstream, not ours) for kind='issue' is the single
     # most consequential misreading of this model.
+    #
     # severity is driven by the latest `observation` diary event, not the
     # frozen row (spec: watchdog-rethink-design.md §5.2 — severity, kind and
     # heal windows read the latest observation; kind itself is a real column
     # mutated only by reclassify(), so it stays read straight off the row).
-    events = i.get("events") or []
-    observations = [e for e in events if e.get("type") == "observation"]
-    latest_obs = (observations[-1].get("data") or {}) if observations else {}
-    severity = latest_obs.get("severity") or i.get("severity")
+    # Only `issue show` (via query.get_issue) attaches `latest_observation`
+    # — a dedicated, never-truncated lookup (query.latest_observation). The
+    # list-shaped callers of this renderer (`issue list`, `series context`,
+    # `series issues`, `issue lineage`) don't attach it — one extra query
+    # per row would be N+1 for a 200-row list — so they fall back to the
+    # frozen `issue.severity` column. That fallback is marked `(row)` so it
+    # can never silently disagree with `issue show`'s reading of the same
+    # issue without saying why (a real gap: nothing here re-syncs the two).
+    obs = i.get("latest_observation")
+    obs_data = (obs or {}).get("data") or {}
+    severity = obs_data.get("severity")
+    frozen = severity is None
+    if frozen:
+        severity = i.get("severity")
 
     span = f"{i.get('first_seen_at')}→{i.get('last_seen_at')}"
     # The issue's VERDICT is the product's classification of the defect, stored by
@@ -144,7 +270,8 @@ def _render_issue(i: dict) -> str:
     # would print "verdict=open" for every open issue and hide the real one.
     verdict = (i.get("details") or {}).get("verdict")
     head = (f"{i.get('id')} · {i.get('check_id')} · kind={i.get('kind')} · "
-            f"severity={severity} · {i.get('state')}/{i.get('stage')} · {span}")
+            f"severity={severity}{'(row)' if frozen else ''} · "
+            f"{i.get('state')}/{i.get('stage')} · {span}")
     if verdict:
         head += f" · verdict={verdict}"
     if i.get("resolution_reason"):
@@ -154,18 +281,33 @@ def _render_issue(i: dict) -> str:
     lines.append(f"  series={series_key} title={i.get('title')}" if series_key
                  else f"  title={i.get('title')}")
 
-    if observations:
-        verdict_summary = latest_obs.get("verdict_summary")
+    if obs is not None:
+        lines.append(f"  observed_at={obs.get('at')}")
+        verdict_summary = obs_data.get("verdict_summary")
         if verdict_summary:
             counts = ", ".join(f"{k}={v}" for k, v in verdict_summary.items())
             lines.append(f"  verdict_summary: {counts}")
-        human_summary = latest_obs.get("human_summary")
+        human_summary = obs_data.get("human_summary")
         if human_summary:
             lines.append(f"  human_summary: {human_summary}")
 
     for k, v in (i.get("details") or {}).items():
         if isinstance(v, list) and len(v) > 20:
             lines.append(f"  (details.{k}: {len(v)} items, omitted — use --json)")
+
+    # "Already tried": only `issue show` attaches actions (query.get_issue).
+    # Capped defensively, same spirit as everything else in this file — an
+    # issue with a long heal history shouldn't flood the terminal.
+    actions = i.get("actions")
+    if actions:
+        cap = 10
+        lines.append(f"  actions ({len(actions)}):")
+        for a in actions[:cap]:
+            for line in _render_action(a).splitlines():
+                lines.append("  " + line)
+        if len(actions) > cap:
+            lines.append(f"  … {len(actions) - cap} earlier actions omitted — "
+                          f"use `action list --issue {i.get('id')}`")
 
     return "\n".join(lines)
 
@@ -179,11 +321,45 @@ def _render_run(r: dict) -> str:
 
 
 def _render_action(a: dict) -> str:
-    return (
+    # A failed heal (or an investigation that closed without a PR) is only
+    # useful as "already tried" evidence if its CONCLUSION is visible, not
+    # just its status — the deleted `_md_actions` printed `result`, `pr_url`
+    # and a log tail for exactly this reason ("same bug filed 5x" is what
+    # happens when an agent can't see that a previous attempt already ran
+    # and why it didn't land).
+    head = (
         f"{a.get('id')} · issue={a.get('issue_id')} · type={a.get('type')} · "
         f"status={a.get('status')} · requested_by={a.get('requested_by')} · "
         f"created={a.get('created_at')} finished={a.get('finished_at')}"
     )
+    lines = [head]
+    outcome = a.get("outcome") or {}
+    bits = []
+    if outcome.get("result"):
+        bits.append(f"result={outcome['result']}")
+    if outcome.get("pr_url"):
+        bits.append(f"pr={outcome['pr_url']}")
+    if outcome.get("issue_url"):
+        bits.append(f"issue_url={outcome['issue_url']}")
+    if outcome.get("issue_state"):
+        bits.append(f"issue_state={outcome['issue_state']}")
+    if outcome.get("error"):
+        # An `error` can be an entire captured subprocess failure (a shelled
+        # `gh` command's stderr, complete with its own multi-KB --body
+        # argument) — cap it like every other heavy field in this file
+        # rather than dumping it inline. --json still has the exact string.
+        error = str(outcome["error"]).replace("\n", " ")
+        if len(error) > 200:
+            error = error[:200] + "… (truncated — use --json)"
+        bits.append(f"error={error}")
+    if bits:
+        lines.append("  " + " · ".join(bits))
+    log = outcome.get("log")
+    if log:
+        for entry in log[-2:]:
+            text = str(entry).split(" ", 1)[-1]  # drop the leading ISO timestamp
+            lines.append(f"  log: {text[:120]}")
+    return "\n".join(lines)
 
 
 def _render_event(e: dict) -> str:
@@ -196,8 +372,9 @@ def _render_event(e: dict) -> str:
 
 def _render_similar(r: dict) -> str:
     return (
-        f"{r.get('series_key')} · {r.get('check_id')} · kind={r.get('kind')} · "
-        f"severity={r.get('severity')} · last_seen={r.get('last_seen_at')}"
+        f"{r.get('id')} · {r.get('series_key')} · {r.get('check_id')} · "
+        f"kind={r.get('kind')} · severity={r.get('severity')} · "
+        f"last_seen={r.get('last_seen_at')}"
     )
 
 
@@ -251,38 +428,49 @@ def _cmd_guide(args) -> int:
 
 @_with_conn
 def _cmd_series_list(conn, args) -> int:
-    rows = query.list_series(conn, labels=_parse_labels(args.label),
-                              active=not args.inactive, limit=_FETCH_POOL)
-    _emit(rows, args, _render_series)
+    rows, overflow = _fetch_pool(query.list_series, conn, labels=_parse_labels(args.label),
+                                  active=not args.inactive)
+    _emit(rows, args, _render_series, pool_overflowed=overflow)
     return 0
 
 
 @_with_conn
 def _cmd_series_show(conn, args) -> int:
-    _emit(query.get_series(conn, args.key), args, _render_series)
+    series = _require_series(conn, args)
+    if series is None:
+        return 2
+    _emit(series, args, _render_series)
     return 0
 
 
 @_with_conn
 def _cmd_series_context(conn, args) -> int:
+    if _require_series(conn, args) is None:
+        return 2
     _emit(query.series_context(conn, args.key), args, _render_issue)
     return 0
 
 
 @_with_conn
 def _cmd_series_checks(conn, args) -> int:
+    if _require_series(conn, args) is None:
+        return 2
     _emit(query.series_checks(conn, args.key), args, _render_series_checks)
     return 0
 
 
 @_with_conn
 def _cmd_series_issues(conn, args) -> int:
+    if _require_series(conn, args) is None:
+        return 2
     _emit(query.series_issues(conn, args.key), args, _render_issue)
     return 0
 
 
 @_with_conn
 def _cmd_series_snapshot(conn, args) -> int:
+    if _require_series(conn, args) is None:
+        return 2
     _emit(query.get_snapshot(conn, args.key), args, _render_snapshot)
     return 0
 
@@ -297,7 +485,10 @@ def _cmd_checks_list(conn, args) -> int:
 
 @_with_conn
 def _cmd_checks_show(conn, args) -> int:
-    _emit(query.get_check(conn, args.check_id), args, _render_check)
+    check = query.get_check(conn, args.check_id)
+    if check is None:
+        return _no_such(args, "check", args.check_id, "check list")
+    _emit(check, args, _render_check)
     return 0
 
 
@@ -305,22 +496,28 @@ def _cmd_checks_show(conn, args) -> int:
 
 @_with_conn
 def _cmd_issues_list(conn, args) -> int:
-    rows = query.list_issues(
-        conn, state=args.state, check_id=args.check_id,
-        labels=_parse_labels(args.label), kind=args.kind, limit=_FETCH_POOL)
-    _emit(rows, args, _render_issue)
+    rows, overflow = _fetch_pool(
+        query.list_issues, conn, state=args.state, check_id=args.check_id,
+        labels=_parse_labels(args.label), kind=args.kind)
+    _emit(rows, args, _render_issue, pool_overflowed=overflow)
     return 0
 
 
 @_with_conn
 def _cmd_issues_show(conn, args) -> int:
-    _emit(query.get_issue(conn, args.issue_id), args, _render_issue)
+    issue = query.get_issue(conn, args.issue_id)
+    if issue is None:
+        return _no_such(args, "issue", args.issue_id, "issue list")
+    _emit(issue, args, _render_issue)
     return 0
 
 
 @_with_conn
 def _cmd_issues_timeline(conn, args) -> int:
-    _emit(query.list_events(conn, args.issue_id, limit=_FETCH_POOL), args, _render_event)
+    if _require_issue_row(conn, args) is None:
+        return 2
+    rows, overflow = _fetch_pool(query.list_events, conn, args.issue_id, keep="tail")
+    _emit(rows, args, _render_event, truncate="tail", pool_overflowed=overflow)
     return 0
 
 
@@ -341,10 +538,10 @@ def _cmd_issues_lineage(conn, args) -> int:
         chain.append(issue)
         current_id = issue.get("predecessor_id")
     if not chain:
-        # Unknown issue id: same "(nothing found)" / null as `issues show`
-        # on a miss, via _emit's None handling — not an empty-list silence.
-        _emit(None, args, _render_issue)
-        return 0
+        # Unknown issue id: a real lookup failure, not "this issue has no
+        # lineage" (every real issue resolves to at least itself) — report
+        # it the same way every other id/key miss is reported, exit 2.
+        return _no_such(args, "issue", args.issue_id, "issue list")
     _emit(chain, args, _render_issue)
     if not args.json and len(chain) == _LINEAGE_DEPTH_CAP and current_id:
         print(f"… lineage walk capped at {_LINEAGE_DEPTH_CAP} hops")
@@ -353,7 +550,10 @@ def _cmd_issues_lineage(conn, args) -> int:
 
 @_with_conn
 def _cmd_issues_similar(conn, args) -> int:
-    _emit(query.issues_similar(conn, args.issue_id, limit=_FETCH_POOL), args, _render_similar)
+    if _require_issue_row(conn, args) is None:
+        return 2
+    rows, overflow = _fetch_pool(query.issues_similar, conn, args.issue_id)
+    _emit(rows, args, _render_similar, pool_overflowed=overflow)
     return 0
 
 
@@ -361,18 +561,30 @@ def _cmd_issues_similar(conn, args) -> int:
 
 @_with_conn
 def _cmd_runs_list(conn, args) -> int:
-    _emit(query.list_runs(conn, limit=_FETCH_POOL), args, _render_run)
+    rows, overflow = _fetch_pool(query.list_runs, conn)
+    _emit(rows, args, _render_run, pool_overflowed=overflow)
     return 0
 
 
 @_with_conn
 def _cmd_runs_show(conn, args) -> int:
-    _emit(query.get_run(conn, args.run_id), args, _render_run)
+    run = query.get_run(conn, args.run_id)
+    if run is None:
+        return _no_such(args, "run", args.run_id, "run list")
+    _emit(run, args, _render_run)
     return 0
 
 
 @_with_conn
 def _cmd_runs_covering(conn, args) -> int:
+    # Resolve the series FIRST: run_covering(series=None) already returns
+    # None for a series that doesn't exist, and that's the exact same `None`
+    # it returns for a real series no scanned run covers — a typo'd key or a
+    # fingerprint/series-id passed by mistake used to read as "not covered"
+    # (the coverage conclusion the doctrine's "Start here" step 4 builds on)
+    # instead of "you looked up the wrong thing."
+    if query.get_series(conn, args.key) is None:
+        return _no_such(args, "series", args.key, "series list")
     row = query.run_covering(conn, args.key, check_id=args.check_id)
     if args.json:
         print(json.dumps(row, indent=2, default=str))
@@ -394,9 +606,10 @@ def _cmd_runs_covering(conn, args) -> int:
 
 @_with_conn
 def _cmd_actions_list(conn, args) -> int:
-    rows = query.list_actions(conn, issue_id=args.issue_id, type=args.type_,
-                               status=args.status, limit=_FETCH_POOL)
-    _emit(rows, args, _render_action)
+    rows, overflow = _fetch_pool(
+        query.list_actions, conn, issue_id=args.issue_id, type=args.type_,
+        status=args.status)
+    _emit(rows, args, _render_action, pool_overflowed=overflow)
     return 0
 
 
@@ -418,7 +631,9 @@ def _build_parser() -> argparse.ArgumentParser:
     global_.add_argument(
         "--limit", type=int, default=20,
         help="Cap how many rows print (default 20). A capped list always "
-             "reports how many rows it dropped — never a silent truncation.")
+             "reports how many rows it dropped — never a silent truncation, "
+             "even past the 200-row fetch pool, where the count becomes "
+             "'at least N' rather than exact.")
     global_.add_argument(
         "--dsn", default=None,
         help="Read-only connection string. Defaults to $WDM_READONLY_PG_DSN "
@@ -519,8 +734,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p = issue_sub.add_parser(
         "timeline", parents=[global_],
-        help="This issue's append-only diary (issue_event), oldest first. Read "
-             "this before trusting the frozen `details` on the row itself.")
+        help="This issue's append-only diary (issue_event), oldest first — a "
+             "capped view always keeps the NEWEST events and reports how many "
+             "OLDER ones it dropped. Read this before trusting the frozen "
+             "`details` on the row itself.")
     p.add_argument("issue_id")
     p.set_defaults(handler=_cmd_issues_timeline)
 
@@ -557,7 +774,8 @@ def _build_parser() -> argparse.ArgumentParser:
              "narrower — did a run re-check THIS check on this series. Scans "
              "only the 200 most-recently-finished completed runs, so 'not "
              "covered' means not covered within that window, not 'never "
-             "covered'.")
+             "covered'. Exits 2 with 'no such series' if KEY doesn't resolve "
+             "to a real series — that is never reported as 'not covered'.")
     p.add_argument("key")
     p.add_argument("--check", dest="check_id", metavar="CHECK_ID",
                     help="Narrow to whether this specific check was re-run on the series.")

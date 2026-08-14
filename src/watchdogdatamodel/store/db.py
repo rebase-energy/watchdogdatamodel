@@ -27,5 +27,5 @@ def tx(conn):
 
 def bootstrap(conn: psycopg.Connection) -> None:
     """Create all tables/indexes/triggers. Idempotent by construction."""
-    ddl = (files("watchdogdatamodel") / "schema.sql").read_text()
+    ddl = (files("watchdogdatamodel") / "schema.sql").read_text(encoding="utf-8")
     conn.execute(ddl)

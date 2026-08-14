@@ -18,9 +18,12 @@ use it whenever you need a precise value, are diffing two calls, or are
 quoting a field in a report. Without `--json` you get a compact,
 human-scale rendering meant to be skimmed. `--limit` (default 20) caps how
 many rows print; a capped list always says what it dropped, so a short
-list is never mistaken for a complete one. `--dsn` overrides the
-connection string; without it the CLI reads `WDM_READONLY_PG_DSN` then
-`WATCHDOG_READONLY_PG_DSN` from the environment.
+list is never mistaken for a complete one — even past the 200-row fetch
+pool every list-style command draws from, where the true total is unknown
+and the footer says "at least N more" instead of an exact count (narrow
+with `--check` / `--label` rather than trusting the number literally).
+`--dsn` overrides the connection string; without it the CLI reads
+`WDM_READONLY_PG_DSN` then `WATCHDOG_READONLY_PG_DSN` from the environment.
 
 Every command that touches the database exits **2** and prints a message
 containing "no wdm access" if the DSN is missing or the connection fails.
@@ -29,6 +32,13 @@ issue body alone, and say so plainly in your report — do not present
 conclusions as if you had read a record you could not actually reach.
 `guide` (this document) is the one exception: it reads a file packaged
 with the library and needs no database at all, so it always works.
+
+Any command taking an issue id or a series key also exits **2** if that id
+or key doesn't resolve to a real row — printed as `(no such issue: …)` /
+`(no such series: …)`, distinct from `(nothing found)` (which means the
+subject is real but has nothing to show for that particular question).
+Treat the two differently: the first means you looked up the wrong thing;
+the second is itself an answer.
 
 ## Command surface
 
@@ -78,7 +88,14 @@ an alias for the same subcommands).
    justified opening the row, not a live view of the series. The current
    picture lives in the `observation` events on the issue's diary
    (`issue timeline <id>`) — read the timeline before trusting an old
-   `details` window as if it were still true.
+   `details` window as if it were still true. The timeline always shows
+   the issue's *newest* activity: a capped view drops from the OLD end, so
+   a short timeline never quietly hides the last three days of it. `issue
+   show`'s printed `severity` (and, when present, `verdict_summary` /
+   `human_summary`) already reads the newest `observation` for you, with
+   its own timestamp printed alongside as `observed_at` — that is the one
+   place this doctrine wants you to trust "current" without opening the
+   timeline yourself.
 3. **A PASS only means something if a covering run actually re-checked
    that series.** `run covering <key> [--check ID]` answers this: with no
    `--check` it answers "which run last covered this series, whatever
@@ -87,7 +104,9 @@ an alias for the same subcommands).
    most-recently-finished completed runs, so a "not covered" result means
    **not covered within that window** — not "never covered." No covering
    run means your evidence about this series may be stale; it does not
-   mean the series is healthy.
+   mean the series is healthy. A `key` that doesn't resolve to a real
+   series is reported as `(no such series: …)`, exit 2 — never as "not
+   covered": that wording is reserved for a series that genuinely exists.
 4. **A merged PR never closes an issue.** Only a later run that finds the
    data healthy resolves it. Landing a fix is necessary but not
    sufficient — say that resolution is pending the next covering run,
@@ -123,9 +142,29 @@ Handed an issue id, in order:
 Compact rendering is the default and is meant to be skimmed, not parsed.
 Reach for `--json` whenever you need an exact field value. Every list
 caps at `--limit` (20 by default) and always prints what it dropped — a
-short list is never a silent truncation. The same discipline applies
-inside a single row: a `details` or snapshot `payload` key holding a list
-longer than 20 items is never dumped inline — it prints as
-`(details.<key>: N items, omitted — use --json)` so a per-point array
-can't flood your context window. Ask for `--json` on that one row if you
-actually need the array.
+short list is never a silent truncation, and that holds at the fetch-pool
+boundary too: past 200 matching rows the exact count is unknown, so the
+footer says `… at least N more (fetch pool 200 — …)` rather than a number
+that would quietly be wrong. `issue timeline` is the one list that reads
+newest-first-kept: it displays oldest-to-newest as a diary should, but a
+capped view always keeps the newest end and reports `… N older events
+omitted`, never the reverse. The same discipline applies inside a single
+row: a `details` or snapshot `payload` key holding a list longer than 20
+items is never dumped inline — it prints as `(details.<key>: N items,
+omitted — use --json)` so a per-point array can't flood your context
+window. Ask for `--json` on that one row if you actually need the array.
+
+An id or key that doesn't resolve to a real row is never silence: every
+such command prints `(no such <thing>: …)` and exits 2 (or, under
+`--json`, `{"error": "no_such_<thing>", "key": …}`) — distinct from
+`(nothing found)`, which means the lookup succeeded and the answer is
+genuinely empty. A `severity` printed with a trailing `(row)` marker (on
+`issue list`, `series context`, `series issues`, `issue lineage`) means it
+came from the frozen `issue.severity` column because fetching each row's
+latest observation individually would be N+1 queries on a 200-row list —
+`issue show` always has the unmarked, observation-derived reading for the
+same issue, and the two can legitimately disagree without either being
+wrong. `action list` (and the actions attached to `issue show`) render
+each action's `outcome.result`, any `pr_url`/`issue_url`, and the last two
+`outcome.log` lines when present — "already tried" only tells you
+something if you can see how it ended, not just that it happened.

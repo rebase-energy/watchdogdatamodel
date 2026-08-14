@@ -9,6 +9,9 @@ dependencies = [
     "timedatamodel[pandas]",
 ]
 
+[project.scripts]
+wdm = "watchdogdatamodel.cli:main"
+
 [dependency-groups]
 dev = ["pytest>=8"]
 

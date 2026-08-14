@@ -95,7 +95,7 @@ $ uv run python -m watchdogdatamodel.cli issue show 1fdaadc7-675b-4acf-a703-d122
 the frozen row column (the touch path never updates that column — see
 "Deliberate decisions" below), and prints that observation's timestamp right
 next to it as `observed_at`. `issue list` (like `series context`/`series
-issues`/`issue lineage`) can't afford that lookup per row on a 200-row list,
+issues`) can't afford that lookup per row on a 200-row list,
 so it falls back to the frozen `issue.severity` column — marked `(row)` so
 it's never mistaken for the same current reading `issue show` gives. `kind=
 issue` means this one is ours to fix, `kind=context` above means it's real
@@ -245,10 +245,12 @@ read-only DSN. Tools + doctrine (`guide`) let the agent decide.
   dedicated `query.latest_observation` lookup**, not the possibly-truncated
   attached event list and not the frozen `severity` column on the row — the
   touch path never updates that column, so the column alone would silently
-  go stale. `issue list`/`series context`/`series issues`/`issue lineage`
-  can't afford a per-row dedicated lookup on a 200-row list, so they read
-  the frozen column instead, marked `severity=…(row)` so it's never mistaken
-  for the same current reading.
+  go stale. `issue list`/`series context`/`series issues` can't afford a
+  per-row dedicated lookup on a 200-row list, so they read the frozen column
+  instead, marked `severity=…(row)` so it's never mistaken for the same
+  current reading. `issue lineage` DOES get the unmarked, observation-derived
+  reading — it fetches each hop through `get_issue` — so it agrees with
+  `issue show`.
 - **`query.list_events` fetches the newest `limit` events, not the oldest.**
   It still *returns* them oldest-first (a diary reads top to bottom), but
   the selection keeps the newest end — a capped timeline used to hide

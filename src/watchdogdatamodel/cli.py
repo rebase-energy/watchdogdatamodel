@@ -12,6 +12,7 @@ import argparse
 import json
 import sys
 from importlib.resources import files
+from uuid import UUID
 
 import psycopg
 
@@ -44,7 +45,7 @@ def _fetch_pool(fn, *args, keep: str = "head", **kwargs):
     that overflows it.
 
     Returns `(rows, pool_overflowed)`. `rows` is capped back down to
-    `_FETCH_POOL`, dropped from the front by default (`keep="head"` — every
+    `_FETCH_POOL`, keeping the front by default (`keep="head"` — every
     list here is already sorted best-first) or from the back when
     `keep="tail"` (the timeline: its rows are chronological, oldest first,
     so the newest ones to keep are at the end). `pool_overflowed` is True
@@ -100,8 +101,10 @@ def _emit(rows, args, render, *, truncate: str = "head", pool_overflowed: bool =
         if pool_overflowed:
             at_least = known_more + 1
             if truncate == "tail":
+                # No narrowing flags exist on the timeline — don't suggest any.
                 print(f"… at least {at_least} older events omitted "
-                      f"(fetch pool {_FETCH_POOL} — narrow with --check / --label)")
+                      f"(fetch pool {_FETCH_POOL}: this issue's diary is longer "
+                      f"than the pool, so the true count is unknown)")
             else:
                 print(f"… at least {at_least} more "
                       f"(fetch pool {_FETCH_POOL} — narrow with --check / --label)")
@@ -140,14 +143,30 @@ def _require_series(conn, args) -> dict | None:
     return series
 
 
-def _require_issue_row(conn, args) -> dict | None:
-    """Resolve `args.issue_id` to a bare issue row (no diary, no actions —
-    see `query.get_issue_row`), or report the lookup miss. Same rationale as
+def _require_issue_row(conn, args, issue_id: str | None = None) -> dict | None:
+    """Resolve an issue id to a bare issue row (no diary, no actions — see
+    `query.get_issue_row`), or report the lookup miss. Same rationale as
     `_require_series`: an issue id that doesn't exist must never look like
-    an issue that exists but has an empty timeline/no similar issues."""
-    row = query.get_issue_row(conn, args.issue_id)
+    an issue that exists but has an empty timeline/no similar issues.
+
+    `issue_id` defaults to `args.issue_id`; pass it explicitly for commands
+    where the id arrives under another name (e.g. `action list --issue`).
+
+    The UUID check comes first because the likeliest typo class is passing
+    something id-SHAPED but not an id — a fingerprint like
+    `GB:consumption:neso|timing_gaps`, or a series key. Postgres rejects
+    those with InvalidTextRepresentation inside the handler, i.e. AFTER the
+    connection guard, so without this they escaped as a traceback instead of
+    the documented `(no such issue: …)` / exit 2 path."""
+    ident = args.issue_id if issue_id is None else issue_id
+    try:
+        UUID(str(ident))
+    except (ValueError, AttributeError, TypeError):
+        _no_such(args, "issue", ident, "issue list")
+        return None
+    row = query.get_issue_row(conn, ident)
     if row is None:
-        _no_such(args, "issue", args.issue_id, "issue list")
+        _no_such(args, "issue", ident, "issue list")
     return row
 
 
@@ -250,7 +269,7 @@ def _render_issue(i: dict) -> str:
     # Only `issue show` (via query.get_issue) attaches `latest_observation`
     # — a dedicated, never-truncated lookup (query.latest_observation). The
     # list-shaped callers of this renderer (`issue list`, `series context`,
-    # `series issues`, `issue lineage`) don't attach it — one extra query
+    # `series issues`) don't attach it — one extra query
     # per row would be N+1 for a 200-row list — so they fall back to the
     # frozen `issue.severity` column. That fallback is marked `(row)` so it
     # can never silently disagree with `issue show`'s reading of the same
@@ -505,6 +524,15 @@ def _cmd_issues_list(conn, args) -> int:
 
 @_with_conn
 def _cmd_issues_show(conn, args) -> int:
+    # UUID pre-check before the query: `issue show` takes the id directly rather
+    # than through _require_issue_row (it needs the FULL issue, diary included),
+    # so without this a non-uuid argument — a fingerprint or series key, the
+    # likeliest typo — raised InvalidTextRepresentation past the connection guard
+    # and escaped as a traceback instead of `(no such issue: …)` / exit 2.
+    try:
+        UUID(str(args.issue_id))
+    except (ValueError, AttributeError, TypeError):
+        return _no_such(args, "issue", args.issue_id, "issue list")
     issue = query.get_issue(conn, args.issue_id)
     if issue is None:
         return _no_such(args, "issue", args.issue_id, "issue list")
@@ -527,6 +555,13 @@ def _cmd_issues_lineage(conn, args) -> int:
     # predecessor_id backward. Depth-capped and cycle-guarded defensively —
     # the schema shouldn't produce a cycle, but this must never hang either
     # way.
+    # UUID pre-check, as in `issue show`: a non-uuid argument would raise
+    # InvalidTextRepresentation on the first get_issue, past the connection
+    # guard, and escape as a traceback instead of exit 2.
+    try:
+        UUID(str(args.issue_id))
+    except (ValueError, AttributeError, TypeError):
+        return _no_such(args, "issue", args.issue_id, "issue list")
     chain: list[dict] = []
     seen: set[str] = set()
     current_id = args.issue_id
@@ -568,6 +603,13 @@ def _cmd_runs_list(conn, args) -> int:
 
 @_with_conn
 def _cmd_runs_show(conn, args) -> int:
+    # Same UUID pre-check as _require_issue_row: a non-uuid argument would raise
+    # InvalidTextRepresentation inside this handler — past the connection guard —
+    # and escape as a traceback rather than the documented exit-2 path.
+    try:
+        UUID(str(args.run_id))
+    except (ValueError, AttributeError, TypeError):
+        return _no_such(args, "run", args.run_id, "run list")
     run = query.get_run(conn, args.run_id)
     if run is None:
         return _no_such(args, "run", args.run_id, "run list")
@@ -606,6 +648,15 @@ def _cmd_runs_covering(conn, args) -> int:
 
 @_with_conn
 def _cmd_actions_list(conn, args) -> int:
+    # Resolve --issue first: this is the "what has already been tried" question,
+    # so a false empty reads as "nothing tried" and invites re-queueing a heal or
+    # re-filing an investigation that already ran. AGENT.md promises exit 2 for
+    # every id-taking command; this was the one command still answering
+    # `(nothing found)` exit 0 for an id that doesn't exist.
+    # `is not None`, not truthiness: `--issue ""` must reach the guard (and be
+    # rejected as a lookup miss) rather than fall through as "every issue".
+    if args.issue_id is not None and _require_issue_row(conn, args) is None:
+        return 2
     rows, overflow = _fetch_pool(
         query.list_actions, conn, issue_id=args.issue_id, type=args.type_,
         status=args.status)

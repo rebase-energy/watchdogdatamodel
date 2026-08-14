@@ -79,6 +79,19 @@ def test_timeline_shows_newest_events_when_truncated(conn):
 
 
 @requires_db
+def test_action_list_rejects_an_issue_id_that_does_not_exist():
+    # `action list --issue X` answers "what has already been tried". An empty
+    # list for a nonexistent id reads as "nothing tried" and invites re-queueing
+    # a heal or re-filing an investigation that already ran — the repo's
+    # documented "same bug filed 5×" failure. A non-uuid must land the same way
+    # (it used to raise InvalidTextRepresentation past the connection guard).
+    for bad in ("00000000-0000-0000-0000-000000000000", "not-a-uuid"):
+        res = _run(["action", "list", "--issue", bad], dsn=DSN)
+        assert res.returncode == 2, f"{bad!r}: {res.stdout}{res.stderr}"
+        assert "no such issue" in (res.stdout + res.stderr).lower()
+
+
+@requires_db
 def test_run_covering_distinguishes_no_such_series_from_not_covered(conn):
     # Regression lock for finding 2: a series key that doesn't exist at all
     # used to fall through to the same "(not covered: ...)" text as a real,

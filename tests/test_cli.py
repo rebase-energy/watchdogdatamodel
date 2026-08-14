@@ -25,7 +25,10 @@ def _run(args, dsn=None):
 
 @requires_db
 @pytest.mark.parametrize("args", CMDS, ids=lambda a: "-".join(a))
-def test_command_runs(args):
+def test_command_runs(args, conn):
+    # `conn` is unused but required: it is what bootstraps the schema. Without
+    # it, a virgin database has no tables, every DB-backed command correctly
+    # answers "no wdm access" exit 2, and these tests fail on the wrong thing.
     # Exit status only: an empty table is a legitimate answer for the list
     # commands, and asserting non-empty stdout would make this test depend on
     # whatever rows other test modules happened to leave behind (they truncate).
@@ -79,7 +82,7 @@ def test_timeline_shows_newest_events_when_truncated(conn):
 
 
 @requires_db
-def test_action_list_rejects_an_issue_id_that_does_not_exist():
+def test_action_list_rejects_an_issue_id_that_does_not_exist(conn):  # conn: bootstraps the schema
     # `action list --issue X` answers "what has already been tried". An empty
     # list for a nonexistent id reads as "nothing tried" and invites re-queueing
     # a heal or re-filing an investigation that already ran — the repo's

@@ -165,7 +165,8 @@ observation individually would be N+1 queries on a 200-row list — `issue
 show` always has the unmarked, observation-derived reading for the same
 issue, and the two can legitimately disagree without either being wrong.
 `issue lineage` also gives the unmarked, observation-derived reading (it
-fetches each hop in full), so it agrees with `issue show`. `action list` (and the actions attached to `issue show`) render
+fetches each hop in full), so it agrees with `issue show`. `action list` (and
+the actions attached to `issue show`) render
 each action's `outcome.result`, any `pr_url`/`issue_url`, and the last two
 `outcome.log` lines when present — "already tried" only tells you
 something if you can see how it ended, not just that it happened.

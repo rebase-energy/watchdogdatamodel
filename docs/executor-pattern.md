@@ -57,6 +57,32 @@ in them. The agent builds its own picture by calling the CLI (or the
    clean covering `check_run` decides, not the executor's claim of success.
 5. Scope: the one subject the executor pointed it at (the issue id it was
    handed) — not whatever else the agent found while poking around.
+6. **The queue never trusts a client to finish.** An executor is a process on
+   somebody's hardware; it will be SIGKILL'd, lose its network, or run on a
+   laptop that closes its lid (all three happened to one run, 2026-08-14 —
+   five claimed actions sat `running` for seven hours, each blocking its
+   dedup cluster). Every dispatch therefore pairs with three recoveries,
+   in escalating order of distrust:
+   - *client obituary*: an executor that gives up marks its own action
+     failed before exiting — best-effort, dies with the process;
+   - *server-side reaper*: the product's sweep fails actions an executor
+     **explicitly claimed** (a claim marker written at start) and then
+     abandoned. Claimed-ness is the key — an unclaimed `running` action may
+     legitimately be waiting days for a human start signal, and reaping by
+     age alone would kill it. Skip actions with deliverable evidence: those
+     are `reconcile_external`'s to recover, and reaping one first makes the
+     action terminal before the recovery lands;
+   - *reconcile of survivors*: deliverables outlive their executor (a
+     report file on disk is not a process). Reconciliation must try to
+     DELIVER stranded artifacts through the normal door before failing
+     anything — a dead executor whose agent finished is a lost delivery,
+     not a lost investigation.
+7. **Parse deliverables liberally; never discard finished work.** The agent's
+   deliverable is prose written by a model, and format markers get dressed
+   in markdown (`# NO-PR` for `NO-PR` — a real run lost a complete, correct
+   investigation to those two characters). Where possible, classify by
+   evidence instead of markers: an empty diff *is* the statement "no code
+   change warranted"; deliver it as findings.
 
 ## Lifecycle mapping
 
